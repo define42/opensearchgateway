@@ -75,6 +75,19 @@ services:
       - opensearch-net
     restart: unless-stopped
 
+  ldap:
+    image: glauth/glauth
+    container_name: ldap
+    restart: always
+    ports:
+      - "389:389"
+    volumes:
+      - ./testldap/default-config.cfg:/app/config/config.cfg
+      - ./testldap/key.pem:/app/config/key.pem
+      - ./testldap/cert.pem:/app/config/cert.pem
+    networks:
+      - opensearch-net
+
 volumes:
   opensearch-data:
 
