@@ -58,6 +58,7 @@ type Config struct {
 
 type Client struct {
 	cfg              Config
+	ensuredTenants   sync.Map
 	ensuredDataViews sync.Map
 }
 
@@ -134,6 +135,10 @@ type dashboardsSavedObjectRequest struct {
 type dashboardsDataViewAttributes struct {
 	Title         string `json:"title"`
 	TimeFieldName string `json:"timeFieldName"`
+}
+
+type tenantRequest struct {
+	Description string `json:"description"`
 }
 
 const demoPageHTML = `<!DOCTYPE html>
@@ -540,6 +545,11 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	document["event_time"] = eventTime.UTC().Format(time.RFC3339)
 
+	if err := g.client.EnsureDashboardDataView(r.Context(), indexName); err != nil {
+		writeErrorJSON(w, http.StatusBadGateway, fmt.Sprintf("Dashboards setup failed: %v", err))
+		return
+	}
+
 	bootstrapped, err := g.client.ensureWriteAlias(r.Context(), writeAlias)
 	if err != nil {
 		writeErrorJSON(w, http.StatusBadGateway, fmt.Sprintf("OpenSearch bootstrap failed: %v", err))
@@ -550,10 +560,6 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErrorJSON(w, http.StatusBadGateway, fmt.Sprintf("OpenSearch ingest failed: %v", err))
 		return
-	}
-
-	if err := g.client.EnsureDashboardDataView(r.Context(), indexName); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: ensure Dashboards data view for %q failed: %v\n", buildDataViewPattern(indexName), err)
 	}
 
 	writeJSON(w, http.StatusCreated, ingestResponse{
@@ -679,13 +685,47 @@ func (c *Client) IndexDocument(ctx context.Context, alias string, document map[s
 	return response, nil
 }
 
+func (c *Client) EnsureTenant(ctx context.Context, tenantName string) error {
+	if c.cfg.DashboardsURL == "" {
+		return nil
+	}
+
+	if _, ok := c.ensuredTenants.Load(tenantName); ok {
+		return nil
+	}
+
+	path := "/_plugins/_security/api/tenants/" + url.PathEscape(tenantName)
+	err := c.doJSON(ctx, http.MethodGet, path, nil, nil, []int{http.StatusOK})
+	if err != nil {
+		if !isNotFoundResponse(err) {
+			return err
+		}
+
+		body := tenantRequest{
+			Description: fmt.Sprintf("Gateway tenant for %s", tenantName),
+		}
+		if err := c.doJSON(ctx, http.MethodPut, path, body, nil, []int{http.StatusOK, http.StatusCreated}); err != nil {
+			return err
+		}
+	}
+
+	c.ensuredTenants.Store(tenantName, true)
+	return nil
+}
+
 func (c *Client) EnsureDashboardDataView(ctx context.Context, indexName string) error {
 	if c.cfg.DashboardsURL == "" {
 		return nil
 	}
 
+	if err := c.EnsureTenant(ctx, indexName); err != nil {
+		return err
+	}
+
+	tenantName := indexName
 	dataViewID := buildDataViewID(indexName)
-	if _, ok := c.ensuredDataViews.Load(dataViewID); ok {
+	cacheKey := tenantName + "/" + dataViewID
+	if _, ok := c.ensuredDataViews.Load(cacheKey); ok {
 		return nil
 	}
 
@@ -697,11 +737,11 @@ func (c *Client) EnsureDashboardDataView(ctx context.Context, indexName string) 
 	}
 
 	path := "/api/saved_objects/index-pattern/" + url.PathEscape(dataViewID) + "?overwrite=true"
-	if err := c.doDashboardsJSON(ctx, http.MethodPost, path, body, nil, []int{http.StatusOK, http.StatusCreated}); err != nil {
+	if err := c.doDashboardsJSONInTenant(ctx, tenantName, http.MethodPost, path, body, nil, []int{http.StatusOK, http.StatusCreated}); err != nil {
 		return err
 	}
 
-	c.ensuredDataViews.Store(dataViewID, true)
+	c.ensuredDataViews.Store(cacheKey, true)
 	return nil
 }
 
@@ -765,6 +805,12 @@ func (c *Client) doDashboardsJSON(ctx context.Context, method, path string, body
 	return c.doJSONWithRequest(ctx, method, path, body, out, okStatuses, c.newDashboardsRequest)
 }
 
+func (c *Client) doDashboardsJSONInTenant(ctx context.Context, tenantName, method, path string, body any, out any, okStatuses []int) error {
+	return c.doJSONWithRequest(ctx, method, path, body, out, okStatuses, func(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
+		return c.newDashboardsRequestForTenant(ctx, tenantName, method, path, body)
+	})
+}
+
 func (c *Client) doJSONWithRequest(ctx context.Context, method, path string, body any, out any, okStatuses []int, buildRequest func(context.Context, string, string, io.Reader) (*http.Request, error)) error {
 	var reader io.Reader
 	if body != nil {
@@ -811,11 +857,15 @@ func (c *Client) newRequest(ctx context.Context, method, path string, body io.Re
 }
 
 func (c *Client) newDashboardsRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
+	return c.newDashboardsRequestForTenant(ctx, c.cfg.DashboardsTenant, method, path, body)
+}
+
+func (c *Client) newDashboardsRequestForTenant(ctx context.Context, tenantName, method, path string, body io.Reader) (*http.Request, error) {
 	headers := map[string]string{
 		"osd-xsrf": "true",
 	}
-	if c.cfg.DashboardsTenant != "" {
-		headers["securitytenant"] = c.cfg.DashboardsTenant
+	if tenantName != "" {
+		headers["securitytenant"] = tenantName
 	}
 
 	return c.newRequestForBase(ctx, c.cfg.DashboardsURL, method, path, body, c.cfg.DashboardsUsername, c.cfg.DashboardsPassword, headers)

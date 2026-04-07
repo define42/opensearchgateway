@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -158,14 +159,118 @@ func TestEnsureISMPolicyUpdatesWhenExistingDiffers(t *testing.T) {
 	}
 }
 
-func TestEnsureDashboardDataViewCreatesExpectedPattern(t *testing.T) {
+func TestEnsureTenantCreatesWhenMissing(t *testing.T) {
 	t.Parallel()
 
 	var calls []string
+	var createBody map[string]any
+
+	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+
+		switch len(calls) {
+		case 1:
+			if r.Method != http.MethodGet || r.URL.Path != "/_plugins/_security/api/tenants/orders" {
+				t.Fatalf("unexpected first request: %s %s", r.Method, r.URL.Path)
+			}
+			http.NotFound(w, r)
+		case 2:
+			if r.Method != http.MethodPut || r.URL.Path != "/_plugins/_security/api/tenants/orders" {
+				t.Fatalf("unexpected second request: %s %s", r.Method, r.URL.Path)
+			}
+			createBody = decodeRequestBody(t, r)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = io.WriteString(w, `{}`)
+		default:
+			t.Fatalf("unexpected extra request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer openSearch.Close()
+
+	cfg := testConfig(openSearch)
+	cfg.DashboardsURL = "http://dashboards.example"
+
+	client := &Client{cfg: cfg}
+	if err := client.EnsureTenant(context.Background(), "orders"); err != nil {
+		t.Fatalf("EnsureTenant returned error: %v", err)
+	}
+
+	if !reflect.DeepEqual(calls, []string{
+		"GET /_plugins/_security/api/tenants/orders",
+		"PUT /_plugins/_security/api/tenants/orders",
+	}) {
+		t.Fatalf("unexpected request sequence: %#v", calls)
+	}
+	if got := createBody["description"]; got != "Gateway tenant for orders" {
+		t.Fatalf("unexpected tenant description: %#v", got)
+	}
+}
+
+func TestEnsureTenantSkipsWhenExisting(t *testing.T) {
+	t.Parallel()
+
+	var calls []string
+	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+
+		if r.Method != http.MethodGet || r.URL.Path != "/_plugins/_security/api/tenants/orders" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"orders":{"reserved":false}}`)
+	}))
+	defer openSearch.Close()
+
+	cfg := testConfig(openSearch)
+	cfg.DashboardsURL = "http://dashboards.example"
+
+	client := &Client{cfg: cfg}
+	if err := client.EnsureTenant(context.Background(), "orders"); err != nil {
+		t.Fatalf("EnsureTenant returned error: %v", err)
+	}
+
+	if !reflect.DeepEqual(calls, []string{"GET /_plugins/_security/api/tenants/orders"}) {
+		t.Fatalf("unexpected request sequence: %#v", calls)
+	}
+}
+
+func TestEnsureTenantReturnsErrorOnFailure(t *testing.T) {
+	t.Parallel()
+
+	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/_plugins/_security/api/tenants/orders" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		http.Error(w, `{"error":"tenant lookup failed"}`, http.StatusInternalServerError)
+	}))
+	defer openSearch.Close()
+
+	cfg := testConfig(openSearch)
+	cfg.DashboardsURL = "http://dashboards.example"
+
+	client := &Client{cfg: cfg}
+	if err := client.EnsureTenant(context.Background(), "orders"); err == nil {
+		t.Fatal("expected EnsureTenant to fail")
+	}
+}
+
+func TestEnsureDashboardDataViewCreatesExpectedPattern(t *testing.T) {
+	t.Parallel()
+
+	var openSearchCalls []string
+	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		openSearchCalls = append(openSearchCalls, r.Method+" "+r.URL.Path)
+
+		if r.Method != http.MethodGet || r.URL.Path != "/_plugins/_security/api/tenants/orders" {
+			t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"orders":{"reserved":false}}`)
+	}))
+	defer openSearch.Close()
+
 	var requestBody map[string]any
 	dashboards := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls = append(calls, r.Method+" "+r.URL.RequestURI())
-
 		expectedPath := "/api/saved_objects/index-pattern/gateway-index-pattern-orders?overwrite=true"
 		if r.Method != http.MethodPost || r.URL.RequestURI() != expectedPath {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.RequestURI())
@@ -173,7 +278,7 @@ func TestEnsureDashboardDataViewCreatesExpectedPattern(t *testing.T) {
 		if got := r.Header.Get("osd-xsrf"); got != "true" {
 			t.Fatalf("expected osd-xsrf header, got %q", got)
 		}
-		if got := r.Header.Get("securitytenant"); got != "admin_tenant" {
+		if got := r.Header.Get("securitytenant"); got != "orders" {
 			t.Fatalf("expected securitytenant header, got %q", got)
 		}
 
@@ -183,22 +288,16 @@ func TestEnsureDashboardDataViewCreatesExpectedPattern(t *testing.T) {
 	}))
 	defer dashboards.Close()
 
-	client := &Client{cfg: Config{
-		DashboardsURL:      dashboards.URL,
-		DashboardsUsername: "admin",
-		DashboardsPassword: "Admin123!",
-		DashboardsTenant:   "admin_tenant",
-		HTTPClient:         dashboards.Client(),
-	}}
+	client := &Client{cfg: testConfigWithDashboards(openSearch, dashboards)}
 
 	if err := client.EnsureDashboardDataView(context.Background(), "orders"); err != nil {
 		t.Fatalf("EnsureDashboardDataView returned error: %v", err)
 	}
 
-	if !reflect.DeepEqual(calls, []string{
-		"POST /api/saved_objects/index-pattern/gateway-index-pattern-orders?overwrite=true",
+	if !reflect.DeepEqual(openSearchCalls, []string{
+		"GET /_plugins/_security/api/tenants/orders",
 	}) {
-		t.Fatalf("unexpected request sequence: %#v", calls)
+		t.Fatalf("unexpected OpenSearch request sequence: %#v", openSearchCalls)
 	}
 
 	attributes := nestedMap(t, requestBody["attributes"])
@@ -213,16 +312,25 @@ func TestEnsureDashboardDataViewCreatesExpectedPattern(t *testing.T) {
 func TestGatewayIngestEnsuresDashboardDataView(t *testing.T) {
 	t.Parallel()
 
-	var openSearchCalls []string
-	var dashboardsCalls []string
+	var mu sync.Mutex
+	var calls []string
+	appendCall := func(call string) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls = append(calls, call)
+	}
 
 	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		openSearchCalls = append(openSearchCalls, r.Method+" "+r.URL.Path)
-
 		switch r.Method + " " + r.URL.Path {
+		case "GET /_plugins/_security/api/tenants/orders":
+			appendCall("tenant-get")
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"orders":{"reserved":false}}`)
 		case "HEAD /_alias/orders-20241230-rollover":
+			appendCall("alias-head")
 			w.WriteHeader(http.StatusOK)
 		case "POST /orders-20241230-rollover/_doc":
+			appendCall("doc-post")
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"result":"created","_id":"dash-view"}`)
 		default:
@@ -232,11 +340,13 @@ func TestGatewayIngestEnsuresDashboardDataView(t *testing.T) {
 	defer openSearch.Close()
 
 	dashboards := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		dashboardsCalls = append(dashboardsCalls, r.Method+" "+r.URL.RequestURI())
-
 		if r.Method != http.MethodPost || r.URL.RequestURI() != "/api/saved_objects/index-pattern/gateway-index-pattern-orders?overwrite=true" {
 			t.Fatalf("unexpected Dashboards request: %s %s", r.Method, r.URL.RequestURI())
 		}
+		if got := r.Header.Get("securitytenant"); got != "orders" {
+			t.Fatalf("expected securitytenant header, got %q", got)
+		}
+		appendCall("data-view-post")
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, `{}`)
 	}))
@@ -251,16 +361,13 @@ func TestGatewayIngestEnsuresDashboardDataView(t *testing.T) {
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("expected status 201, got %d: %s", recorder.Code, recorder.Body.String())
 	}
-	if !reflect.DeepEqual(openSearchCalls, []string{
-		"HEAD /_alias/orders-20241230-rollover",
-		"POST /orders-20241230-rollover/_doc",
+	if !reflect.DeepEqual(calls, []string{
+		"tenant-get",
+		"data-view-post",
+		"alias-head",
+		"doc-post",
 	}) {
-		t.Fatalf("unexpected OpenSearch calls: %#v", openSearchCalls)
-	}
-	if !reflect.DeepEqual(dashboardsCalls, []string{
-		"POST /api/saved_objects/index-pattern/gateway-index-pattern-orders?overwrite=true",
-	}) {
-		t.Fatalf("unexpected Dashboards calls: %#v", dashboardsCalls)
+		t.Fatalf("unexpected request order: %#v", calls)
 	}
 }
 
@@ -541,6 +648,88 @@ func TestGatewayOpenSearchFailuresReturnBadGateway(t *testing.T) {
 				t.Fatalf("unexpected OpenSearch sequence: %#v", calls)
 			}
 		})
+	}
+}
+
+func TestGatewayTenantFailureReturnsBadGateway(t *testing.T) {
+	t.Parallel()
+
+	var openSearchCalls []string
+	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		openSearchCalls = append(openSearchCalls, r.Method+" "+r.URL.Path)
+
+		if r.Method != http.MethodGet || r.URL.Path != "/_plugins/_security/api/tenants/orders" {
+			t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
+		}
+		http.Error(w, `{"error":"tenant lookup failed"}`, http.StatusInternalServerError)
+	}))
+	defer openSearch.Close()
+
+	dashboards := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected Dashboards request: %s %s", r.Method, r.URL.RequestURI())
+	}))
+	defer dashboards.Close()
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/ingest/orders", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
+	request.Header.Set("Content-Type", "application/json")
+
+	(&Gateway{client: &Client{cfg: testConfigWithDashboards(openSearch, dashboards)}}).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("expected status 502, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if !reflect.DeepEqual(openSearchCalls, []string{
+		"GET /_plugins/_security/api/tenants/orders",
+	}) {
+		t.Fatalf("unexpected OpenSearch sequence: %#v", openSearchCalls)
+	}
+}
+
+func TestGatewayDataViewFailureReturnsBadGateway(t *testing.T) {
+	t.Parallel()
+
+	var openSearchCalls []string
+	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		openSearchCalls = append(openSearchCalls, r.Method+" "+r.URL.Path)
+
+		if r.Method != http.MethodGet || r.URL.Path != "/_plugins/_security/api/tenants/orders" {
+			t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"orders":{"reserved":false}}`)
+	}))
+	defer openSearch.Close()
+
+	var dashboardsCalls []string
+	dashboards := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dashboardsCalls = append(dashboardsCalls, r.Method+" "+r.URL.RequestURI())
+
+		if r.Method != http.MethodPost || r.URL.RequestURI() != "/api/saved_objects/index-pattern/gateway-index-pattern-orders?overwrite=true" {
+			t.Fatalf("unexpected Dashboards request: %s %s", r.Method, r.URL.RequestURI())
+		}
+		http.Error(w, `{"error":"data view create failed"}`, http.StatusInternalServerError)
+	}))
+	defer dashboards.Close()
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/ingest/orders", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
+	request.Header.Set("Content-Type", "application/json")
+
+	(&Gateway{client: &Client{cfg: testConfigWithDashboards(openSearch, dashboards)}}).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("expected status 502, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if !reflect.DeepEqual(openSearchCalls, []string{
+		"GET /_plugins/_security/api/tenants/orders",
+	}) {
+		t.Fatalf("unexpected OpenSearch sequence: %#v", openSearchCalls)
+	}
+	if !reflect.DeepEqual(dashboardsCalls, []string{
+		"POST /api/saved_objects/index-pattern/gateway-index-pattern-orders?overwrite=true",
+	}) {
+		t.Fatalf("unexpected Dashboards sequence: %#v", dashboardsCalls)
 	}
 }
 
