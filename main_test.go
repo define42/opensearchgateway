@@ -158,6 +158,47 @@ func TestEnsureISMPolicyUpdatesWhenExistingDiffers(t *testing.T) {
 	}
 }
 
+func TestGatewayRootServesDemoForm(t *testing.T) {
+	t.Parallel()
+
+	gateway := &Gateway{client: &Client{cfg: Config{}}}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+
+	gateway.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", recorder.Code)
+	}
+	if got := recorder.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/html") {
+		t.Fatalf("expected HTML content type, got %q", got)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "<form") || !strings.Contains(body, "Index Name") || !strings.Contains(body, "JSON Payload") {
+		t.Fatalf("expected demo form content, got %q", body)
+	}
+	if !strings.Contains(body, "/ingest/") {
+		t.Fatalf("expected demo page to reference ingest endpoint, got %q", body)
+	}
+}
+
+func TestGatewayRootRejectsNonGet(t *testing.T) {
+	t.Parallel()
+
+	gateway := &Gateway{client: &Client{cfg: Config{}}}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/", nil)
+
+	gateway.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected status 405, got %d", recorder.Code)
+	}
+	if got := recorder.Header().Get("Allow"); got != http.MethodGet {
+		t.Fatalf("expected Allow header %q, got %q", http.MethodGet, got)
+	}
+}
+
 func TestGatewayIngestBootstrapsAndIndexes(t *testing.T) {
 	t.Parallel()
 
