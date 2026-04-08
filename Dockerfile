@@ -1,22 +1,35 @@
-FROM golang:1.26.1-alpine AS build
-
-WORKDIR /src
-
-COPY go.mod ./
-RUN go mod download
-
-COPY . .
-
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/opensearchgateway .
-
-FROM alpine:3.22
-
-RUN apk add --no-cache ca-certificates
+# ---------- build stage ----------
+FROM golang:1.26-alpine AS builder
 
 WORKDIR /app
 
-COPY --from=build /out/opensearchgateway /usr/local/bin/opensearchgateway
+# Enable static binary
+ENV CGO_ENABLED=0 \
+    GOOS=linux \
+    GOARCH=amd64
 
+# Copy module files first (better caching)
+COPY go.mod go.sum  ./
+RUN go mod download
+
+
+# Copy source
+COPY *.go ./
+
+# Build
+RUN go build -o registry-proxy
+
+
+# ---------- runtime stage ----------
+FROM scratch
+
+WORKDIR /app
+
+# Copy binary
+COPY --from=builder /app/registry-proxy /app/registry-proxy
+
+# TLS certs will be mounted
 EXPOSE 8080
 
-ENTRYPOINT ["/usr/local/bin/opensearchgateway"]
+
+ENTRYPOINT ["/app/registry-proxy"]
