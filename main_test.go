@@ -370,6 +370,7 @@ func TestGatewayIngestEnsuresDashboardDataView(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/ingest/orders", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
 	request.Header.Set("Content-Type", "application/json")
+	addTestIngestBasicAuth(request)
 
 	testGatewayHandler(testConfigWithDashboards(openSearch, dashboards)).ServeHTTP(recorder, request)
 
@@ -460,6 +461,9 @@ func TestGatewayDemoServesDemoForm(t *testing.T) {
 	body := recorder.Body.String()
 	if !strings.Contains(body, "<form") || !strings.Contains(body, "Index Name") || !strings.Contains(body, "JSON Payload") {
 		t.Fatalf("expected demo form content, got %q", body)
+	}
+	if !strings.Contains(body, "LDAP Username") || !strings.Contains(body, "LDAP Password") {
+		t.Fatalf("expected demo page to include LDAP credential fields, got %q", body)
 	}
 	if !strings.Contains(body, "/ingest/") {
 		t.Fatalf("expected demo page to reference ingest endpoint, got %q", body)
@@ -1114,6 +1118,146 @@ func TestGatewayExpiredSessionRedirectsToLogin(t *testing.T) {
 	}
 }
 
+func TestGatewayIngestRequiresAuthentication(t *testing.T) {
+	t.Parallel()
+
+	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer openSearch.Close()
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/ingest/orders", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
+	request.Header.Set("Content-Type", "application/json")
+
+	testGatewayHandler(testConfig(openSearch)).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status 401, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("WWW-Authenticate"); got != `Basic realm="OpenSearchGateway ingest"` {
+		t.Fatalf("unexpected WWW-Authenticate header: %q", got)
+	}
+}
+
+func TestGatewayIngestRejectsInvalidCredentials(t *testing.T) {
+	t.Parallel()
+
+	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer openSearch.Close()
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/ingest/orders", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.SetBasicAuth("writer", "wrong")
+
+	testGatewayHandlerWithAuth(testConfig(openSearch), func(username, password string) (*User, []Access, error) {
+		return nil, nil, errLDAPInvalidCredentials
+	}).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status 401, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestGatewayIngestRejectsReadOnlyAccess(t *testing.T) {
+	t.Parallel()
+
+	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer openSearch.Close()
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/ingest/team10", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.SetBasicAuth("johndoe", "dogood")
+
+	testGatewayHandlerWithAuth(testConfig(openSearch), func(username, password string) (*User, []Access, error) {
+		return &User{Name: username, Namespace: "team10", PullOnly: true}, []Access{
+			{Group: "team10_r", Namespace: "team10", PullOnly: true},
+		}, nil
+	}).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected status 403, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestGatewayIngestRejectsWrongNamespace(t *testing.T) {
+	t.Parallel()
+
+	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer openSearch.Close()
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/ingest/orders", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.SetBasicAuth("writer", "secret")
+
+	testGatewayHandlerWithAuth(testConfig(openSearch), func(username, password string) (*User, []Access, error) {
+		return &User{Name: username, Namespace: "team1"}, []Access{
+			{Group: "team1_rw", Namespace: "team1"},
+		}, nil
+	}).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected status 403, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestGatewayIngestUsesAuthenticatedSessionAccess(t *testing.T) {
+	t.Parallel()
+
+	var calls []string
+	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+
+		switch r.Method + " " + r.URL.Path {
+		case "HEAD /_alias/team10-20241230-rollover":
+			w.WriteHeader(http.StatusOK)
+		case "POST /team10-20241230-rollover/_doc":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"result":"created","_id":"session-doc"}`)
+		default:
+			t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer openSearch.Close()
+
+	gateway := newGateway(&Client{cfg: testConfig(openSearch)}, defaultTestLDAPAuthenticator)
+	token, expiresAt, err := gateway.sessions.Create(sessionData{
+		User:       &User{Name: "ingestuser", Namespace: "team10"},
+		Access:     []Access{{Group: "team10_rw", Namespace: "team10"}},
+		Namespaces: []string{"team10"},
+		AuthHeader: buildBasicAuthorization("ingestuser", "dogood"),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/ingest/team10", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token, Expires: expiresAt})
+
+	gateway.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("expected status 201, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if !reflect.DeepEqual(calls, []string{
+		"HEAD /_alias/team10-20241230-rollover",
+		"POST /team10-20241230-rollover/_doc",
+	}) {
+		t.Fatalf("unexpected OpenSearch sequence: %#v", calls)
+	}
+}
+
 func TestGatewayIngestBootstrapsAndIndexes(t *testing.T) {
 	t.Parallel()
 
@@ -1151,6 +1295,7 @@ func TestGatewayIngestBootstrapsAndIndexes(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/ingest/orders/", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello","count":1}`))
 	request.Header.Set("Content-Type", "application/json")
+	addTestIngestBasicAuth(request)
 
 	testGatewayHandler(testConfig(openSearch)).ServeHTTP(recorder, request)
 
@@ -1214,6 +1359,7 @@ func TestGatewayRepeatWriteSkipsBootstrap(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/ingest/orders", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
 	request.Header.Set("Content-Type", "application/json")
+	addTestIngestBasicAuth(request)
 
 	testGatewayHandler(testConfig(openSearch)).ServeHTTP(recorder, request)
 
@@ -1265,7 +1411,12 @@ func TestGatewayValidationErrors(t *testing.T) {
 		{name: "name too long", method: http.MethodPost, path: "/ingest/" + longIndexName, contentType: "application/json", body: `{"event_time":"2024-12-30T10:11:12Z"}`, wantStatus: http.StatusBadRequest},
 	}
 
-	gateway := testGatewayHandler(testConfig(openSearch))
+	gateway := testGatewayHandlerWithAuth(testConfig(openSearch), func(username, password string) (*User, []Access, error) {
+		return &User{Name: username, Namespace: "orders"}, []Access{
+			{Group: "orders_rw", Namespace: "orders"},
+			{Group: longIndexName + "_rw", Namespace: longIndexName},
+		}, nil
+	})
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
@@ -1273,6 +1424,7 @@ func TestGatewayValidationErrors(t *testing.T) {
 			if tt.contentType != "" {
 				request.Header.Set("Content-Type", tt.contentType)
 			}
+			addTestIngestBasicAuth(request)
 
 			gateway.ServeHTTP(recorder, request)
 
@@ -1340,6 +1492,7 @@ func TestGatewayOpenSearchFailuresReturnBadGateway(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodPost, "/ingest/orders", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
 			request.Header.Set("Content-Type", "application/json")
+			addTestIngestBasicAuth(request)
 
 			testGatewayHandler(testConfig(openSearch)).ServeHTTP(recorder, request)
 
@@ -1375,6 +1528,7 @@ func TestGatewayTenantFailureReturnsBadGateway(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/ingest/orders", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
 	request.Header.Set("Content-Type", "application/json")
+	addTestIngestBasicAuth(request)
 
 	testGatewayHandler(testConfigWithDashboards(openSearch, dashboards)).ServeHTTP(recorder, request)
 
@@ -1417,6 +1571,7 @@ func TestGatewayDataViewFailureReturnsBadGateway(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/ingest/orders", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
 	request.Header.Set("Content-Type", "application/json")
+	addTestIngestBasicAuth(request)
 
 	testGatewayHandler(testConfigWithDashboards(openSearch, dashboards)).ServeHTTP(recorder, request)
 
@@ -1474,6 +1629,7 @@ func TestGatewayBootstrapConflictRetriesAliasCheck(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/ingest/orders", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
 	request.Header.Set("Content-Type", "application/json")
+	addTestIngestBasicAuth(request)
 
 	testGatewayHandler(testConfig(openSearch)).ServeHTTP(recorder, request)
 
@@ -1553,11 +1709,27 @@ func testConfigWithDashboards(openSearch, dashboards *httptest.Server) Config {
 }
 
 func testGatewayHandler(cfg Config) http.Handler {
-	return testGatewayHandlerWithAuth(cfg, nil)
+	return testGatewayHandlerWithAuth(cfg, defaultTestLDAPAuthenticator)
 }
 
 func testGatewayHandlerWithAuth(cfg Config, authenticate ldapAuthenticator) http.Handler {
 	return newGateway(&Client{cfg: cfg}, authenticate).Handler()
+}
+
+func defaultTestLDAPAuthenticator(username, password string) (*User, []Access, error) {
+	if strings.TrimSpace(username) == "" || password == "" {
+		return nil, nil, errLDAPInvalidCredentials
+	}
+
+	return &User{Name: username, Namespace: "orders"}, []Access{
+		{Group: "orders_rw", Namespace: "orders"},
+		{Group: "team1_rw", Namespace: "team1"},
+		{Group: "team10_rw", Namespace: "team10"},
+	}, nil
+}
+
+func addTestIngestBasicAuth(request *http.Request) {
+	request.SetBasicAuth("writer", "secret")
 }
 
 func decodeRequestBody(t *testing.T, r *http.Request) map[string]any {

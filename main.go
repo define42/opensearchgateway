@@ -48,6 +48,9 @@ const (
 var (
 	indexNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 	errRouteNotFound = errors.New("route not found")
+
+	errIngestAuthRequired = errors.New("ingest authentication required")
+	errIngestForbidden    = errors.New("ingest user is not allowed to write to this index")
 )
 
 type Config struct {
@@ -577,6 +580,12 @@ const demoPageHTML = `<!DOCTYPE html>
       <label for="index-name">Index Name</label>
       <input id="index-name" name="index" type="text" value="orders" spellcheck="false" autocomplete="off">
 
+      <label for="username">LDAP Username <span class="hint">(optional when already signed in)</span></label>
+      <input id="username" name="username" type="text" spellcheck="false" autocomplete="username">
+
+      <label for="password">LDAP Password <span class="hint">(optional when already signed in)</span></label>
+      <input id="password" name="password" type="password" autocomplete="current-password">
+
       <label for="payload">JSON Payload</label>
       <textarea id="payload" name="payload" spellcheck="false">{
   "event_time": "2024-12-30T10:11:12Z",
@@ -597,6 +606,8 @@ const demoPageHTML = `<!DOCTYPE html>
   <script>
     const form = document.getElementById("demo-form");
     const indexInput = document.getElementById("index-name");
+    const usernameInput = document.getElementById("username");
+    const passwordInput = document.getElementById("password");
     const payloadInput = document.getElementById("payload");
     const result = document.getElementById("result");
     const statusText = document.getElementById("status-text");
@@ -612,15 +623,34 @@ const demoPageHTML = `<!DOCTYPE html>
         return;
       }
 
+      const username = usernameInput.value.trim();
+      const password = passwordInput.value;
+      if ((username && !password) || (!username && password)) {
+        statusText.textContent = "Credentials are incomplete.";
+        result.textContent = "Enter both LDAP username and password, or leave both blank to use your current sign-in session.";
+        if (!username) {
+          usernameInput.focus();
+        } else {
+          passwordInput.focus();
+        }
+        return;
+      }
+
       statusText.textContent = "Sending request...";
       result.textContent = "Submitting to /ingest/" + indexName;
+
+      const headers = {
+        "Content-Type": "application/json"
+      };
+      if (username && password) {
+        headers["Authorization"] = "Basic " + btoa(username + ":" + password);
+      }
 
       try {
         const response = await fetch("/ingest/" + encodeURIComponent(indexName), {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
+          credentials: "same-origin",
+          headers,
           body: payloadInput.value
         });
 
@@ -951,6 +981,18 @@ func (g *Gateway) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := g.authorizeIngestRequest(r, indexName); err != nil {
+		switch {
+		case errors.Is(err, errIngestAuthRequired), errors.Is(err, errLDAPInvalidCredentials), errors.Is(err, errLDAPUserNotFound):
+			writeIngestAuthRequired(w, "LDAP username and password are required for ingest")
+		case errors.Is(err, errLDAPUnauthorized), errors.Is(err, errIngestForbidden):
+			writeErrorJSON(w, http.StatusForbidden, "your LDAP account is not allowed to ingest into this index")
+		default:
+			writeErrorJSON(w, http.StatusBadGateway, fmt.Sprintf("LDAP authentication failed: %v", err))
+		}
+		return
+	}
+
 	contentType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || contentType != "application/json" {
 		writeErrorJSON(w, http.StatusUnsupportedMediaType, "content type must be application/json")
@@ -1021,6 +1063,47 @@ func loginErrorResponse(err error) (int, string) {
 	default:
 		return http.StatusBadGateway, fmt.Sprintf("LDAP authentication failed: %v", err)
 	}
+}
+
+func (g *Gateway) authorizeIngestRequest(r *http.Request, indexName string) error {
+	access, err := g.ingestAccess(r)
+	if err != nil {
+		return err
+	}
+	if !hasIngestWriteAccess(access, indexName) {
+		return errIngestForbidden
+	}
+	return nil
+}
+
+func (g *Gateway) ingestAccess(r *http.Request) ([]Access, error) {
+	if authorization := strings.TrimSpace(r.Header.Get("Authorization")); authorization != "" {
+		username, password, ok := r.BasicAuth()
+		if !ok || strings.TrimSpace(username) == "" || password == "" {
+			return nil, errIngestAuthRequired
+		}
+
+		_, access, err := g.authenticate(strings.TrimSpace(username), password)
+		if err != nil {
+			return nil, err
+		}
+		return access, nil
+	}
+
+	if _, session, ok := g.currentSession(r); ok {
+		return session.Access, nil
+	}
+
+	return nil, errIngestAuthRequired
+}
+
+func hasIngestWriteAccess(access []Access, indexName string) bool {
+	for _, item := range normalizeAccessByNamespace(access) {
+		if item.Namespace == indexName && !item.PullOnly {
+			return true
+		}
+	}
+	return false
 }
 
 func (g *Gateway) currentSession(r *http.Request) (string, sessionData, bool) {
@@ -1892,6 +1975,11 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 
 func writeErrorJSON(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, errorResponse{Error: message})
+}
+
+func writeIngestAuthRequired(w http.ResponseWriter, message string) {
+	w.Header().Set("WWW-Authenticate", `Basic realm="OpenSearchGateway ingest"`)
+	writeErrorJSON(w, http.StatusUnauthorized, message)
 }
 
 func serveDemoPage(w http.ResponseWriter) {

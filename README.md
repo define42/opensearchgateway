@@ -8,6 +8,7 @@ OpenSearchGateway is a small Go web server that sits in front of an OpenSearch c
 It is designed for a very specific ingestion model:
 
 - clients send JSON to `POST /ingest/<index>`
+- clients authenticate to `/ingest` with LDAP credentials or an existing gateway session
 - every document must contain a top-level `event_time`
 - the gateway derives a daily write alias from that timestamp
 - OpenSearch writes go through rollover aliases and backing indices
@@ -37,32 +38,34 @@ When a user signs in through `POST /login`, the gateway:
 When a client sends a document to `POST /ingest/<index>`, the gateway:
 
 1. validates the path and index name
-2. requires `Content-Type: application/json`
-3. parses the body as a single JSON object
-4. requires top-level `event_time` as a UTC RFC3339 string ending in `Z`
-5. derives the write alias as:
+2. requires LDAP-backed authentication, either through HTTP Basic auth or an existing gateway session
+3. checks that the authenticated user has write access to that namespace
+4. requires `Content-Type: application/json`
+5. parses the body as a single JSON object
+6. requires top-level `event_time` as a UTC RFC3339 string ending in `Z`
+7. derives the write alias as:
 
 ```text
 <index>-YYYYMMDD-rollover
 ```
 
-6. ensures an OpenSearch Security tenant named exactly `<index>`
-7. ensures an OpenSearch Dashboards data view inside that tenant with pattern:
+8. ensures an OpenSearch Security tenant named exactly `<index>`
+9. ensures an OpenSearch Dashboards data view inside that tenant with pattern:
 
 ```text
 <index>-*
 ```
 
-8. checks whether the daily write alias exists
-9. if missing, creates the first backing index:
+10. checks whether the daily write alias exists
+11. if missing, creates the first backing index:
 
 ```text
 <index>-YYYYMMDD-rollover-000001
 ```
 
-10. attaches the rollover alias and ISM policy
-11. indexes the document through the alias
-12. returns a compact JSON response describing the write
+12. attaches the rollover alias and ISM policy
+13. indexes the document through the alias
+14. returns a compact JSON response describing the write
 
 ## Why This Exists
 
@@ -113,12 +116,20 @@ Reverse proxies OpenSearch Dashboards through the gateway. These routes require 
 Serves a small demo page where you can:
 
 - enter an index name
+- enter LDAP credentials when you want to ingest directly from the browser
 - paste a JSON document
 - submit it directly to the gateway from the browser
+
+If you are already signed in through `/login`, the demo page can also reuse that gateway session instead of sending explicit Basic auth credentials.
 
 ### `POST /ingest/<index>`
 
 Primary ingest endpoint.
+
+This endpoint now requires authentication. The gateway accepts either:
+
+- HTTP Basic auth with an LDAP username and password
+- an existing gateway session cookie created by `POST /login`
 
 Accepted path examples:
 
@@ -141,6 +152,27 @@ Index names must:
 - only contain lowercase letters, digits, `-`, and `_`
 
 The generated alias and first backing index must also fit within OpenSearch index naming limits.
+
+### Ingest authorization model
+
+Successful LDAP authentication is not enough by itself. The user must also have write access to the target namespace.
+
+The gateway derives namespace access from LDAP groups using these suffixes:
+
+- `<namespace>_r`: read-only access
+- `<namespace>_rd`: read plus delete access
+- `<namespace>_rw`: read plus write access
+- `<namespace>_rwd`: full read, write, and delete access
+
+For ingest, only write-capable groups are accepted:
+
+- `<namespace>_rw`
+- `<namespace>_rwd`
+
+Examples:
+
+- a user in `team10_r` can open Dashboards for `team10`, but cannot ingest to `POST /ingest/team10`
+- a user in `team10_rw` can ingest to `POST /ingest/team10`
 
 ### Required document shape
 
@@ -183,6 +215,8 @@ Example:
 
 ### Error behavior
 
+- `401` when `/ingest/<index>` is called without valid LDAP credentials
+- `403` when LDAP auth succeeds but the user does not have write access to that namespace
 - `400` for request validation errors
 - `405` for wrong HTTP methods
 - `415` for non-JSON requests
@@ -237,6 +271,13 @@ That means:
 - a user with LDAP groups `team1_rwd` and `team2_rw` gets roles that map to `team1-*` and `team2-*`
 
 This keeps data-view organization aligned with the ingest namespace.
+
+One important distinction:
+
+- Dashboards visibility is namespace-scoped and can be read-only
+- ingest requires write access for that same namespace
+
+So a user in `team10_r` can browse the `team10` tenant in Dashboards, while a user in `team10_rw` can both browse and ingest into `team10`.
 
 ## Local Development Stack
 
@@ -294,6 +335,24 @@ That user resolves to these namespace groups in the sample LDAP config:
 
 So after login, the gateway provisions access for `team1-*`, `team2-*`, and `team10-*`.
 
+The sample LDAP config also includes these useful ingest examples:
+
+```text
+username: johndoe
+password: dogood
+groups: team10_r
+```
+
+`johndoe` can sign in and browse the `team10` tenant, but cannot ingest into `team10`.
+
+```text
+username: ingestuser
+password: dogood
+groups: team10_rw
+```
+
+`ingestuser` can ingest into `team10` and also access that namespace in Dashboards.
+
 ## Running the Gateway Without Docker
 
 Run it directly with Go:
@@ -344,6 +403,7 @@ Note that per-index data views are created in tenants named after the index, so 
 
 ```bash
 curl -X POST http://localhost:8080/ingest/orders \
+  -u ingestuser:dogood \
   -H 'Content-Type: application/json' \
   -d '{
     "event_time": "2024-12-30T10:11:12Z",
@@ -351,6 +411,8 @@ curl -X POST http://localhost:8080/ingest/orders \
     "customer_id": 42
   }'
 ```
+
+If the LDAP user does not have write access for `orders`, the gateway responds with `403 Forbidden`.
 
 ## Project Files
 
@@ -363,7 +425,7 @@ curl -X POST http://localhost:8080/ingest/orders \
 ## Development Notes
 
 - the HTTP client disables TLS verification for OpenSearch, which is convenient for local development but not production-safe
-- the gateway does not include authentication or authorization on its ingest endpoint
+- `/ingest` now requires LDAP authentication plus namespace write access
 - batching is not implemented; each request indexes one JSON document
 - the index template and ISM policy are shared, global bootstrap resources
 - the tenant and data-view setup is demand-driven and happens per index family on first ingest
@@ -378,4 +440,4 @@ go test ./...
 
 ## Summary
 
-This project is a narrow, purpose-built ingest gateway for OpenSearch. It accepts JSON over HTTP, validates and routes documents by `event_time`, creates rollover-friendly daily aliases and backing indices, and automatically prepares matching Dashboards tenants and data views so newly ingested data is easier to discover.
+This project is a narrow, purpose-built ingress and access layer for OpenSearch. It accepts LDAP-authenticated JSON writes over HTTP, validates and routes documents by `event_time`, creates rollover-friendly daily aliases and backing indices, and automatically prepares matching Dashboards tenants and data views so newly ingested data is easier to discover and browse.
