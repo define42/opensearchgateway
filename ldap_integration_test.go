@@ -171,6 +171,114 @@ func TestLDAPIngestUserCanIngestTeam10(t *testing.T) {
 	}
 }
 
+func TestLDAPJohndoeCannotIngestTeam10(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Docker-backed LDAP integration test in short mode")
+	}
+	requireDocker(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	ldapURL, stopLDAP := startDockerGlauth(ctx, t)
+	defer stopLDAP()
+
+	t.Setenv("LDAP_URL", ldapURL)
+	t.Setenv("LDAP_SKIP_TLS_VERIFY", "true")
+	t.Setenv("LDAP_STARTTLS", "false")
+	t.Setenv("LDAP_USER_DOMAIN", "@example.com")
+
+	prevCfg := ldapCfg
+	ldapCfg = loadLDAPConfig()
+	t.Cleanup(func() {
+		ldapCfg = prevCfg
+	})
+
+	var mu sync.Mutex
+	var openSearchCalls []string
+
+	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		openSearchCalls = append(openSearchCalls, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+
+		switch r.Method + " " + r.URL.Path {
+		case "GET /_plugins/_ism/policies/" + ismPolicyID:
+			http.NotFound(w, r)
+		case "PUT /_plugins/_ism/policies/" + ismPolicyID:
+			w.WriteHeader(http.StatusCreated)
+			_, _ = io.WriteString(w, `{}`)
+		case "PUT /_index_template/" + indexTemplateName:
+			w.WriteHeader(http.StatusCreated)
+			_, _ = io.WriteString(w, `{}`)
+		default:
+			t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer openSearch.Close()
+
+	dashboards := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected Dashboards request: %s %s", r.Method, r.URL.RequestURI())
+	}))
+	defer dashboards.Close()
+
+	cfg := Config{
+		BaseURL:            openSearch.URL,
+		Username:           "admin",
+		Password:           defaultPassword,
+		DashboardsURL:      dashboards.URL,
+		DashboardsUsername: "admin",
+		DashboardsPassword: defaultPassword,
+		DashboardsTenant:   defaultTenant,
+		ListenAddr:         ":0",
+		Shards:             2,
+		Replicas:           2,
+		HTTPClient:         &http.Client{Timeout: 10 * time.Second},
+	}
+
+	baseURL, stopGateway := startIntegrationGateway(ctx, t, cfg)
+	defer stopGateway()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/ingest/team10", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"should be forbidden"}`))
+	if err != nil {
+		t.Fatalf("build ingest request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth("johndoe", "dogood")
+
+	resp, err := cfg.HTTPClient.Do(req)
+	if err != nil {
+		t.Fatalf("send ingest request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read ingest response: %v", err)
+	}
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected status 403, got %d: %s", resp.StatusCode, string(body))
+	}
+
+	var response errorResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if response.Error != "your LDAP account is not allowed to ingest into this index" {
+		t.Fatalf("unexpected error response: %#v", response)
+	}
+
+	if len(openSearchCalls) != 3 {
+		t.Fatalf("expected only startup bootstrap calls, got %#v", openSearchCalls)
+	}
+	if containsCall(openSearchCalls, "GET /_plugins/_security/api/tenants/team10") {
+		t.Fatalf("tenant creation should not happen for read-only LDAP user: %#v", openSearchCalls)
+	}
+	if containsCall(openSearchCalls, "POST /team10-20241230-rollover/_doc") {
+		t.Fatalf("document indexing should not happen for read-only LDAP user: %#v", openSearchCalls)
+	}
+}
+
 func requireDocker(t *testing.T) {
 	t.Helper()
 
