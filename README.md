@@ -406,17 +406,17 @@ Note that per-index data views are created in tenants named after the index, so 
 ## Example Ingest
 
 ```bash
-curl -X POST http://localhost:8080/ingest/orders \
+curl -X POST http://localhost:8080/ingest/team10 \
   -u ingestuser:dogood \
   -H 'Content-Type: application/json' \
   -d '{
     "event_time": "2024-12-30T10:11:12Z",
-    "message": "order received",
+    "message": "team10 event received",
     "customer_id": 42
   }'
 ```
 
-If the LDAP user does not have write access for `orders`, the gateway responds with `403 Forbidden`.
+That example works because `ingestuser` has LDAP group `team10_rw`. If the LDAP user does not have write access for the target namespace, the gateway responds with `403 Forbidden`.
 
 ## Project Files
 
@@ -441,6 +441,12 @@ Run the test suite with:
 ```bash
 go test ./...
 ```
+
+Notes:
+
+- some LDAP integration tests start a real GLAuth container with Docker
+- those tests are skipped automatically when Docker is unavailable
+- use `go test ./... -short` if you want to skip the Docker-backed integration tests explicitly
 
 ## Summary
 
