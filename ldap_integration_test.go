@@ -15,6 +15,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	ldappkg "github.com/define42/opensearchgateway/internal/ldap"
 )
 
 func TestLDAPIngestUserCanIngestTeam10(t *testing.T) {
@@ -33,12 +35,6 @@ func TestLDAPIngestUserCanIngestTeam10(t *testing.T) {
 	t.Setenv("LDAP_SKIP_TLS_VERIFY", "true")
 	t.Setenv("LDAP_STARTTLS", "false")
 	t.Setenv("LDAP_USER_DOMAIN", "@example.com")
-
-	prevCfg := ldapCfg
-	ldapCfg = loadLDAPConfig()
-	t.Cleanup(func() {
-		ldapCfg = prevCfg
-	})
 
 	var mu sync.Mutex
 	var openSearchCalls []string
@@ -216,12 +212,6 @@ func TestLDAPJohndoeCannotIngestTeam10(t *testing.T) {
 	t.Setenv("LDAP_STARTTLS", "false")
 	t.Setenv("LDAP_USER_DOMAIN", "@example.com")
 
-	prevCfg := ldapCfg
-	ldapCfg = loadLDAPConfig()
-	t.Cleanup(func() {
-		ldapCfg = prevCfg
-	})
-
 	var mu sync.Mutex
 	var openSearchCalls []string
 
@@ -326,12 +316,6 @@ func TestLDAPAuthenticateAccessErrorScenarios(t *testing.T) {
 	t.Setenv("LDAP_STARTTLS", "false")
 	t.Setenv("LDAP_USER_DOMAIN", "@example.com")
 
-	prevCfg := ldapCfg
-	ldapCfg = loadLDAPConfig()
-	t.Cleanup(func() {
-		ldapCfg = prevCfg
-	})
-
 	t.Run("invalid credentials", func(t *testing.T) {
 		user, access, err := ldapAuthenticateAccess("johndoe", "wrongpass")
 		if !errors.Is(err, errLDAPInvalidCredentials) {
@@ -422,8 +406,7 @@ func waitForLDAPReady(ctx context.Context, t *testing.T, ldapURL string) {
 
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		prevCfg := ldapCfg
-		ldapCfg = LDAPConfig{
+		cfg := LDAPConfig{
 			URL:             ldapURL,
 			BaseDN:          "dc=glauth,dc=com",
 			UserFilter:      "(mail=%s)",
@@ -433,8 +416,7 @@ func waitForLDAPReady(ctx context.Context, t *testing.T, ldapURL string) {
 			StartTLS:        false,
 			SkipTLSVerify:   true,
 		}
-		_, _, err := ldapAuthenticateAccess("ingestuser", "dogood")
-		ldapCfg = prevCfg
+		_, _, err := ldappkg.New(cfg).AuthenticateAccess("ingestuser", "dogood")
 		if err == nil {
 			return
 		}

@@ -8,6 +8,7 @@ import (
 	"strings"
 )
 
+// EnsureTenant creates tenantName if it does not already exist.
 func (c *Client) EnsureTenant(ctx context.Context, tenantName string) error {
 	if c.Config.DashboardsURL == "" {
 		return nil
@@ -36,6 +37,7 @@ func (c *Client) EnsureTenant(ctx context.Context, tenantName string) error {
 	return nil
 }
 
+// EnsureDashboardDataView ensures the tenant-scoped data view for indexName.
 func (c *Client) EnsureDashboardDataView(ctx context.Context, indexName string) error {
 	if c.Config.DashboardsURL == "" {
 		return nil
@@ -71,6 +73,7 @@ func (c *Client) EnsureDashboardDataView(ctx context.Context, indexName string) 
 	return nil
 }
 
+// SetDashboardsDefaultIndex sets the default data view inside tenantName.
 func (c *Client) SetDashboardsDefaultIndex(ctx context.Context, tenantName, dataViewID string) error {
 	body := DashboardsSettingValueRequest{
 		Value: dataViewID,
@@ -81,14 +84,17 @@ func (c *Client) SetDashboardsDefaultIndex(ctx context.Context, tenantName, data
 	return nil
 }
 
+// BuildDataViewID returns the deterministic Dashboards data-view id for indexName.
 func BuildDataViewID(indexName string) string {
 	return "gateway-index-pattern-" + indexName
 }
 
+// BuildDataViewPattern returns the wildcard pattern used by a tenant data view.
 func BuildDataViewPattern(indexName string) string {
 	return indexName + "-*"
 }
 
+// DashboardsAPIPath ensures path is rooted under the Dashboards base path.
 func DashboardsAPIPath(path string) string {
 	if path == "/dashboards" || strings.HasPrefix(path, "/dashboards/") {
 		return path

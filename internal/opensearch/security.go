@@ -15,6 +15,7 @@ import (
 
 var indexNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
+// ProvisionLoginUser ensures roles, tenants, data views, and the internal user.
 func (c *Client) ProvisionLoginUser(ctx context.Context, username, password string, access []authz.Access) ([]string, error) {
 	effective := authz.NormalizeAccessByNamespace(access)
 	if len(effective) == 0 {
@@ -55,6 +56,7 @@ func (c *Client) ProvisionLoginUser(ctx context.Context, username, password stri
 	return namespaces, nil
 }
 
+// EnsureSecurityRole upserts the OpenSearch role used for a namespace access mode.
 func (c *Client) EnsureSecurityRole(ctx context.Context, roleName string, access authz.Access) error {
 	path := "/_plugins/_security/api/roles/" + url.PathEscape(roleName)
 	body := RoleRequestForAccess(access)
@@ -64,6 +66,7 @@ func (c *Client) EnsureSecurityRole(ctx context.Context, roleName string, access
 	return nil
 }
 
+// RoleRequestForAccess converts namespace access into an OpenSearch role payload.
 func RoleRequestForAccess(access authz.Access) SecurityRoleRequest {
 	mode := authz.RoleModeForAccess(access)
 
@@ -94,6 +97,7 @@ func RoleRequestForAccess(access authz.Access) SecurityRoleRequest {
 	}
 }
 
+// UpsertInternalUser creates or replaces an OpenSearch internal user.
 func (c *Client) UpsertInternalUser(ctx context.Context, username, password string, roleNames, backendRoles, namespaces []string) error {
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
@@ -116,6 +120,7 @@ func (c *Client) UpsertInternalUser(ctx context.Context, username, password stri
 	return nil
 }
 
+// EnsureInternalUserWritable rejects reserved or hidden internal users.
 func (c *Client) EnsureInternalUserWritable(ctx context.Context, username string) error {
 	path := "/_plugins/_security/api/internalusers/" + url.PathEscape(username)
 

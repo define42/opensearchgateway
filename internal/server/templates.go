@@ -7,13 +7,15 @@ import (
 	"net/http"
 )
 
-var loginPageTemplate = template.Must(template.New("login").Parse(loginPageHTML))
-
 //go:embed templates/login.html
 var loginPageHTML string
 
 //go:embed templates/demo.html
 var demoPageHTML string
+
+func loginTemplate() *template.Template {
+	return template.Must(template.New("login").Parse(loginPageHTML))
+}
 
 func serveDemoPage(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

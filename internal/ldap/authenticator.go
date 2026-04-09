@@ -1,3 +1,4 @@
+// Package ldap authenticates gateway users and maps LDAP groups to namespaces.
 package ldap
 
 import (
@@ -12,19 +13,25 @@ import (
 )
 
 var (
+	// ErrInvalidCredentials reports an LDAP bind failure caused by bad credentials.
 	ErrInvalidCredentials = errors.New("ldap invalid credentials")
-	ErrUserNotFound       = errors.New("ldap user not found")
-	ErrUnauthorized       = errors.New("ldap user has no authorized groups")
+	// ErrUserNotFound reports an authenticated LDAP user missing from search results.
+	ErrUserNotFound = errors.New("ldap user not found")
+	// ErrUnauthorized reports a valid LDAP user without matching gateway groups.
+	ErrUnauthorized = errors.New("ldap user has no authorized groups")
 )
 
+// Authenticator authenticates users against LDAP using the configured server.
 type Authenticator struct {
 	cfg config.LDAPConfig
 }
 
+// New returns an LDAP authenticator backed by cfg.
 func New(cfg config.LDAPConfig) *Authenticator {
 	return &Authenticator{cfg: cfg}
 }
 
+// AuthenticateAccess validates the credentials and resolves namespace access.
 func (a *Authenticator) AuthenticateAccess(username, password string) (*authz.User, []authz.Access, error) {
 	conn, err := Dial(a.cfg)
 	if err != nil {
@@ -34,55 +41,19 @@ func (a *Authenticator) AuthenticateAccess(username, password string) (*authz.Us
 		_ = conn.Close()
 	}()
 
-	mail := username
-	if !strings.Contains(username, "@") && a.cfg.UserMailDomain != "" {
-		domain := a.cfg.UserMailDomain
-		if !strings.HasPrefix(domain, "@") {
-			domain = "@" + domain
-		}
-		mail = username + domain
-	}
-
-	bindIDs := []string{mail}
-
-	var bindErr error
-	for _, id := range bindIDs {
-		if id == "" {
-			continue
-		}
-		if err := conn.Bind(id, password); err == nil {
-			bindErr = nil
-			break
-		} else {
-			bindErr = err
-		}
-	}
-	if bindErr != nil {
-		if goldap.IsErrorWithCode(bindErr, goldap.LDAPResultInvalidCredentials) {
+	mail := a.mailForUsername(username)
+	if err := conn.Bind(mail, password); err != nil {
+		if goldap.IsErrorWithCode(err, goldap.LDAPResultInvalidCredentials) {
 			return nil, nil, ErrInvalidCredentials
 		}
-		return nil, nil, fmt.Errorf("ldap bind failed: %w", bindErr)
+		return nil, nil, fmt.Errorf("ldap bind failed: %w", err)
 	}
 
-	filter := fmt.Sprintf(a.cfg.UserFilter, mail)
-	searchReq := goldap.NewSearchRequest(
-		a.cfg.BaseDN,
-		goldap.ScopeWholeSubtree,
-		goldap.NeverDerefAliases, 1, 0, false,
-		filter,
-		nil,
-		nil,
-	)
-
-	sr, err := conn.Search(searchReq)
+	entry, err := a.lookupEntry(conn, mail)
 	if err != nil {
-		return nil, nil, fmt.Errorf("ldap search: %w", err)
-	}
-	if len(sr.Entries) == 0 {
-		return nil, nil, fmt.Errorf("%w: %s", ErrUserNotFound, mail)
+		return nil, nil, err
 	}
 
-	entry := sr.Entries[0]
 	groups := entry.GetAttributeValues(a.cfg.GroupAttribute)
 	access, user := AccessFromGroups(username, groups, a.cfg.GroupNamePrefix)
 	if user == nil {
@@ -92,6 +63,39 @@ func (a *Authenticator) AuthenticateAccess(username, password string) (*authz.Us
 	return user, access, nil
 }
 
+func (a *Authenticator) mailForUsername(username string) string {
+	if strings.Contains(username, "@") || a.cfg.UserMailDomain == "" {
+		return username
+	}
+
+	domain := a.cfg.UserMailDomain
+	if !strings.HasPrefix(domain, "@") {
+		domain = "@" + domain
+	}
+	return username + domain
+}
+
+func (a *Authenticator) lookupEntry(conn *goldap.Conn, mail string) (*goldap.Entry, error) {
+	searchReq := goldap.NewSearchRequest(
+		a.cfg.BaseDN,
+		goldap.ScopeWholeSubtree,
+		goldap.NeverDerefAliases, 1, 0, false,
+		fmt.Sprintf(a.cfg.UserFilter, mail),
+		nil,
+		nil,
+	)
+
+	sr, err := conn.Search(searchReq)
+	if err != nil {
+		return nil, fmt.Errorf("ldap search: %w", err)
+	}
+	if len(sr.Entries) == 0 {
+		return nil, fmt.Errorf("%w: %s", ErrUserNotFound, mail)
+	}
+	return sr.Entries[0], nil
+}
+
+// Dial opens an LDAP connection according to cfg.
 func Dial(cfg config.LDAPConfig) (*goldap.Conn, error) {
 	conn, err := goldap.DialURL(cfg.URL, goldap.DialWithTLSConfig(&tls.Config{InsecureSkipVerify: cfg.SkipTLSVerify})) // #nosec G402
 	if err != nil {
@@ -108,6 +112,7 @@ func Dial(cfg config.LDAPConfig) (*goldap.Conn, error) {
 	return conn, nil
 }
 
+// AccessFromGroups converts LDAP group DNs into gateway access entries.
 func AccessFromGroups(username string, groups []string, prefix string) ([]authz.Access, *authz.User) {
 	var selected *authz.User
 	var access []authz.Access
@@ -146,6 +151,7 @@ func AccessFromGroups(username string, groups []string, prefix string) ([]authz.
 	return access, selected
 }
 
+// GroupNameFromDN extracts the leading CN or OU value from a group DN.
 func GroupNameFromDN(dn string) string {
 	parts := strings.SplitN(dn, ",", 2)
 	if len(parts) == 0 {
@@ -165,6 +171,7 @@ func GroupNameFromDN(dn string) string {
 	}
 }
 
+// PermissionsFromGroup parses namespace access suffixes like _r and _rwd.
 func PermissionsFromGroup(group string) (namespace string, pullOnly bool, deleteAllowed bool, ok bool) {
 	switch {
 	case strings.HasSuffix(group, "_rwd"):

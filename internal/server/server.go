@@ -1,3 +1,4 @@
+// Package server wires the HTTP routes, login flow, ingest API, and proxy.
 package server
 
 import (
@@ -17,6 +18,7 @@ import (
 	"github.com/define42/opensearchgateway/internal/session"
 )
 
+// SessionCookieName is the cookie that carries the gateway session token.
 const SessionCookieName = "opensearchgateway_session"
 
 var (
@@ -24,8 +26,10 @@ var (
 	errIngestForbidden    = errors.New("ingest user is not allowed to write to this index")
 )
 
+// AuthenticateFunc validates credentials and returns the resolved LDAP access.
 type AuthenticateFunc func(string, string) (*authz.User, []authz.Access, error)
 
+// Gateway serves the login flow, ingest API, and Dashboards reverse proxy.
 type Gateway struct {
 	Client          *opensearch.Client
 	Authenticate    AuthenticateFunc
@@ -33,11 +37,13 @@ type Gateway struct {
 	IngestAuthCache *ingest.AuthCache
 }
 
+// LoginPageData is the template model for the login form.
 type LoginPageData struct {
 	Error    string
 	Username string
 }
 
+// IngestResponse is returned to clients after a successful ingest request.
 type IngestResponse struct {
 	Result       string `json:"result"`
 	WriteAlias   string `json:"write_alias"`
@@ -45,13 +51,15 @@ type IngestResponse struct {
 	Bootstrapped bool   `json:"bootstrapped"`
 }
 
+// ErrorResponse is the JSON error envelope used by the gateway.
 type ErrorResponse struct {
 	Error string `json:"error"`
 }
 
+// New constructs a gateway with the provided client and authenticator.
 func New(client *opensearch.Client, authenticate AuthenticateFunc) *Gateway {
 	if authenticate == nil {
-		authenticate = func(username, password string) (*authz.User, []authz.Access, error) {
+		authenticate = func(_, _ string) (*authz.User, []authz.Access, error) {
 			return nil, nil, ldappkg.ErrInvalidCredentials
 		}
 	}
@@ -64,6 +72,7 @@ func New(client *opensearch.Client, authenticate AuthenticateFunc) *Gateway {
 	}
 }
 
+// Handler builds the HTTP mux for the gateway routes.
 func (g *Gateway) Handler() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", g.handleRoot)
@@ -134,6 +143,7 @@ func (g *Gateway) handleLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
+// HandleDashboards proxies authenticated requests to OpenSearch Dashboards.
 func (g *Gateway) HandleDashboards(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/dashboards" && !strings.HasPrefix(r.URL.Path, "/dashboards/") {
 		http.NotFound(w, r)
@@ -240,11 +250,7 @@ func (g *Gateway) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 func (g *Gateway) handleIngest(w http.ResponseWriter, r *http.Request) {
 	indexName, err := ingest.ParsePath(r.URL.Path)
 	if err != nil {
-		if errors.Is(err, ingest.ErrRouteNotFound) {
-			http.NotFound(w, r)
-			return
-		}
-		writeErrorJSON(w, http.StatusBadRequest, err.Error())
+		writeIngestPathError(w, r, err)
 		return
 	}
 
@@ -255,44 +261,15 @@ func (g *Gateway) handleIngest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := g.authorizeIngestRequest(r, indexName); err != nil {
-		switch {
-		case errors.Is(err, errIngestAuthRequired), errors.Is(err, ldappkg.ErrInvalidCredentials), errors.Is(err, ldappkg.ErrUserNotFound):
-			writeIngestAuthRequired(w, "LDAP username and password are required for ingest")
-		case errors.Is(err, ldappkg.ErrUnauthorized), errors.Is(err, errIngestForbidden):
-			writeErrorJSON(w, http.StatusForbidden, "your LDAP account is not allowed to ingest into this index")
-		default:
-			writeErrorJSON(w, http.StatusBadGateway, fmt.Sprintf("LDAP authentication failed: %v", err))
-		}
+		writeIngestAuthError(w, err)
 		return
 	}
 
-	mediaType := strings.TrimSpace(r.Header.Get("Content-Type"))
-	contentType, _, err := mimeParse(mediaType)
-	if err != nil || contentType != "application/json" {
-		writeErrorJSON(w, http.StatusUnsupportedMediaType, "content type must be application/json")
-		return
-	}
-
-	document, err := ingest.DecodeJSONObject(r.Body)
+	document, writeAlias, status, err := decodeIngestDocument(r, indexName)
 	if err != nil {
-		writeErrorJSON(w, http.StatusBadRequest, err.Error())
+		writeErrorJSON(w, status, err.Error())
 		return
 	}
-
-	eventTime, err := ingest.ParseEventTime(document)
-	if err != nil {
-		writeErrorJSON(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	writeAlias := ingest.BuildWriteAlias(indexName, eventTime)
-	firstIndex := ingest.BuildFirstBackingIndex(writeAlias)
-	if len(writeAlias) > ingest.MaxIndexNameBytes || len(firstIndex) > ingest.MaxIndexNameBytes {
-		writeErrorJSON(w, http.StatusBadRequest, "generated alias or backing index name exceeds OpenSearch limits")
-		return
-	}
-
-	document["event_time"] = eventTime.UTC().Format(time.RFC3339)
 
 	if err := g.Client.EnsureDashboardDataView(r.Context(), indexName); err != nil {
 		writeErrorJSON(w, http.StatusBadGateway, fmt.Sprintf("Dashboards setup failed: %v", err))
@@ -319,11 +296,12 @@ func (g *Gateway) handleIngest(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// RenderLoginPage writes the login page with the supplied status and model.
 func (g *Gateway) RenderLoginPage(w http.ResponseWriter, status int, data LoginPageData) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
-	if err := loginPageTemplate.Execute(w, data); err != nil {
+	if err := loginTemplate().Execute(w, data); err != nil {
 		http.Error(w, "failed to render login page", http.StatusInternalServerError)
 	}
 }
@@ -351,36 +329,88 @@ func (g *Gateway) authorizeIngestRequest(r *http.Request, indexName string) erro
 }
 
 func (g *Gateway) ingestAccess(r *http.Request) ([]authz.Access, error) {
-	if authorization := strings.TrimSpace(r.Header.Get("Authorization")); authorization != "" {
-		username, password, ok := r.BasicAuth()
-		if !ok || strings.TrimSpace(username) == "" || password == "" {
-			return nil, errIngestAuthRequired
+	if strings.TrimSpace(r.Header.Get("Authorization")) == "" {
+		if _, sessionData, ok := g.currentSession(r); ok {
+			return sessionData.Access, nil
 		}
-
-		username = strings.TrimSpace(username)
-		_, access, _, err := g.IngestAuthCache.Resolve(ingest.AuthCacheKey(username, password), func() (string, []authz.Access, error) {
-			user, access, err := g.Authenticate(username, password)
-			if err != nil {
-				return "", nil, err
-			}
-
-			cachedUsername := username
-			if user != nil && strings.TrimSpace(user.Name) != "" {
-				cachedUsername = strings.TrimSpace(user.Name)
-			}
-			return cachedUsername, access, nil
-		})
-		if err != nil {
-			return nil, err
-		}
-		return access, nil
+		return nil, errIngestAuthRequired
 	}
 
-	if _, sessionData, ok := g.currentSession(r); ok {
-		return sessionData.Access, nil
+	username, password, ok := r.BasicAuth()
+	if !ok || strings.TrimSpace(username) == "" || password == "" {
+		return nil, errIngestAuthRequired
 	}
 
-	return nil, errIngestAuthRequired
+	_, access, _, err := g.IngestAuthCache.Resolve(ingest.AuthCacheKey(strings.TrimSpace(username), password), func() (string, []authz.Access, error) {
+		return g.lookupIngestAccess(strings.TrimSpace(username), password)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return access, nil
+}
+
+func (g *Gateway) lookupIngestAccess(username, password string) (string, []authz.Access, error) {
+	user, access, err := g.Authenticate(username, password)
+	if err != nil {
+		return "", nil, err
+	}
+
+	cachedUsername := username
+	if user != nil && strings.TrimSpace(user.Name) != "" {
+		cachedUsername = strings.TrimSpace(user.Name)
+	}
+	return cachedUsername, access, nil
+}
+
+func writeIngestPathError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, ingest.ErrRouteNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	writeErrorJSON(w, http.StatusBadRequest, err.Error())
+}
+
+func writeIngestAuthError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errIngestAuthRequired), errors.Is(err, ldappkg.ErrInvalidCredentials), errors.Is(err, ldappkg.ErrUserNotFound):
+		writeIngestAuthRequired(w, "LDAP username and password are required for ingest")
+	case errors.Is(err, ldappkg.ErrUnauthorized), errors.Is(err, errIngestForbidden):
+		writeErrorJSON(w, http.StatusForbidden, "your LDAP account is not allowed to ingest into this index")
+	default:
+		writeErrorJSON(w, http.StatusBadGateway, fmt.Sprintf("LDAP authentication failed: %v", err))
+	}
+}
+
+func decodeIngestDocument(r *http.Request, indexName string) (map[string]any, string, int, error) {
+	mediaType := strings.TrimSpace(r.Header.Get("Content-Type"))
+	contentType, _, err := mimeParse(mediaType)
+	if err != nil || contentType != "application/json" {
+		return nil, "", http.StatusUnsupportedMediaType, errors.New("content type must be application/json")
+	}
+
+	document, err := ingest.DecodeJSONObject(r.Body)
+	if err != nil {
+		return nil, "", http.StatusBadRequest, err
+	}
+
+	eventTime, err := ingest.ParseEventTime(document)
+	if err != nil {
+		return nil, "", http.StatusBadRequest, err
+	}
+
+	writeAlias := ingest.BuildWriteAlias(indexName, eventTime)
+	firstIndex := ingest.BuildFirstBackingIndex(writeAlias)
+	if len(writeAlias) > ingest.MaxIndexNameBytes || len(firstIndex) > ingest.MaxIndexNameBytes {
+		return nil, "", http.StatusBadRequest, errors.New("generated alias or backing index name exceeds OpenSearch limits")
+	}
+
+	document["event_time"] = eventTime.UTC().Format(time.RFC3339)
+	return document, writeAlias, 0, nil
+}
+
+func mimeParse(mediaType string) (string, map[string]string, error) {
+	return mime.ParseMediaType(mediaType)
 }
 
 func (g *Gateway) currentSession(r *http.Request) (string, session.Data, bool) {
@@ -424,11 +454,13 @@ func (g *Gateway) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// BuildBasicAuthorization returns a Basic Auth header value for the credentials.
 func BuildBasicAuthorization(username, password string) string {
 	token := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
 	return "Basic " + token
 }
 
+// ForwardedProto reports the original request scheme for proxy headers.
 func ForwardedProto(r *http.Request) string {
 	if r.TLS != nil {
 		return "https"
@@ -436,6 +468,7 @@ func ForwardedProto(r *http.Request) string {
 	return "http"
 }
 
+// SessionHasNamespace reports whether tenantName is in the session namespace list.
 func SessionHasNamespace(data session.Data, tenantName string) bool {
 	for _, namespace := range data.Namespaces {
 		if strings.TrimSpace(namespace) == tenantName {
@@ -466,5 +499,3 @@ func writeIngestAuthRequired(w http.ResponseWriter, message string) {
 	w.Header().Set("WWW-Authenticate", `Basic realm="OpenSearchGateway ingest"`)
 	writeErrorJSON(w, http.StatusUnauthorized, message)
 }
-
-func mimeParse(value string) (string, map[string]string, error) { return mime.ParseMediaType(value) }

@@ -37,7 +37,7 @@ func (g *Gateway) proxyDashboards(w http.ResponseWriter, r *http.Request, sessio
 		ModifyResponse: func(resp *http.Response) error {
 			return g.ModifyDashboardsResponse(resp, sessionData)
 		},
-		ErrorHandler: func(proxyWriter http.ResponseWriter, proxyRequest *http.Request, proxyErr error) {
+		ErrorHandler: func(proxyWriter http.ResponseWriter, _ *http.Request, proxyErr error) {
 			writeErrorJSON(proxyWriter, http.StatusBadGateway, fmt.Sprintf("Dashboards proxy failed: %v", proxyErr))
 		},
 	}
@@ -46,6 +46,7 @@ func (g *Gateway) proxyDashboards(w http.ResponseWriter, r *http.Request, sessio
 	return nil
 }
 
+// ModifyDashboardsResponse patches tenant-scoped data-view lookup responses.
 func (g *Gateway) ModifyDashboardsResponse(resp *http.Response, sessionData session.Data) error {
 	if resp == nil || resp.Request == nil {
 		return nil
@@ -57,11 +58,8 @@ func (g *Gateway) ModifyDashboardsResponse(resp *http.Response, sessionData sess
 		return nil
 	}
 
-	tenantName := strings.TrimSpace(resp.Request.Header.Get("securitytenant"))
-	if tenantName == "" {
-		tenantName = sessionDefaultTenant(sessionData)
-	}
-	if tenantName == "" || !SessionHasNamespace(sessionData, tenantName) {
+	tenantName, ok := dashboardsTenantName(resp.Request, sessionData)
+	if !ok {
 		return nil
 	}
 
@@ -71,23 +69,48 @@ func (g *Gateway) ModifyDashboardsResponse(resp *http.Response, sessionData sess
 	}
 	_ = resp.Body.Close()
 
-	restoreBody := func(payload []byte) {
-		resp.Body = io.NopCloser(bytes.NewReader(payload))
-		resp.ContentLength = int64(len(payload))
-		resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(payload)))
-	}
-
 	var payload opensearch.DashboardsFindResponse
 	if err := json.Unmarshal(body, &payload); err != nil {
-		restoreBody(body)
+		restoreDashboardsBody(resp, body)
 		return nil
 	}
-	if payload.Total != 0 || !MatchesIndexPatternFindQuery(resp.Request.URL.Query(), tenantName) {
-		restoreBody(body)
+	if !shouldPatchIndexPatternResponse(payload, resp.Request, tenantName) {
+		restoreDashboardsBody(resp, body)
 		return nil
 	}
 
-	synthetic := opensearch.DashboardsFindResponse{
+	replacement, err := json.Marshal(syntheticIndexPatternFindResponse(payload, tenantName))
+	if err != nil {
+		return err
+	}
+	restoreDashboardsBody(resp, replacement)
+	resp.Header.Set("Content-Type", "application/json; charset=utf-8")
+	return nil
+}
+
+func dashboardsTenantName(req *http.Request, sessionData session.Data) (string, bool) {
+	tenantName := strings.TrimSpace(req.Header.Get("securitytenant"))
+	if tenantName == "" {
+		tenantName = sessionDefaultTenant(sessionData)
+	}
+	if tenantName == "" || !SessionHasNamespace(sessionData, tenantName) {
+		return "", false
+	}
+	return tenantName, true
+}
+
+func shouldPatchIndexPatternResponse(payload opensearch.DashboardsFindResponse, req *http.Request, tenantName string) bool {
+	return payload.Total == 0 && MatchesIndexPatternFindQuery(req.URL.Query(), tenantName)
+}
+
+func restoreDashboardsBody(resp *http.Response, payload []byte) {
+	resp.Body = io.NopCloser(bytes.NewReader(payload))
+	resp.ContentLength = int64(len(payload))
+	resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+}
+
+func syntheticIndexPatternFindResponse(payload opensearch.DashboardsFindResponse, tenantName string) opensearch.DashboardsFindResponse {
+	response := opensearch.DashboardsFindResponse{
 		Page:    payload.Page,
 		PerPage: payload.PerPage,
 		Total:   1,
@@ -104,18 +127,12 @@ func (g *Gateway) ModifyDashboardsResponse(resp *http.Response, sessionData sess
 		},
 	}
 	if payload.Page > 1 || payload.PerPage == 0 {
-		synthetic.SavedObjects = []opensearch.DashboardsSavedObjectResponse{}
+		response.SavedObjects = []opensearch.DashboardsSavedObjectResponse{}
 	}
-
-	replacement, err := json.Marshal(synthetic)
-	if err != nil {
-		return err
-	}
-	restoreBody(replacement)
-	resp.Header.Set("Content-Type", "application/json; charset=utf-8")
-	return nil
+	return response
 }
 
+// IsDashboardsIndexPatternFindRequest reports whether req is a data-view search.
 func IsDashboardsIndexPatternFindRequest(req *http.Request) bool {
 	if req == nil || req.URL == nil {
 		return false
@@ -132,6 +149,7 @@ func IsDashboardsIndexPatternFindRequest(req *http.Request) bool {
 	return false
 }
 
+// MatchesIndexPatternFindQuery reports whether values target tenantName's data view.
 func MatchesIndexPatternFindQuery(values url.Values, tenantName string) bool {
 	search := strings.TrimSpace(strings.Trim(values.Get("search"), "*"))
 	if search == "" {

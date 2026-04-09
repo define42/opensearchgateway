@@ -1,7 +1,9 @@
+// Package authz defines shared namespace access semantics for the gateway.
 package authz
 
 import "sort"
 
+// User describes the most permissive namespace access selected for a person.
 type User struct {
 	Name          string
 	Group         string
@@ -10,6 +12,7 @@ type User struct {
 	DeleteAllowed bool
 }
 
+// Access describes namespace permissions derived from one LDAP group.
 type Access struct {
 	Group         string
 	Namespace     string
@@ -17,6 +20,7 @@ type Access struct {
 	DeleteAllowed bool
 }
 
+// MorePermissive reports whether a grants more access than b.
 func MorePermissive(a, b *User) bool {
 	if a.DeleteAllowed != b.DeleteAllowed {
 		return a.DeleteAllowed
@@ -27,6 +31,7 @@ func MorePermissive(a, b *User) bool {
 	return false
 }
 
+// NormalizeAccessByNamespace merges duplicate namespaces to the strongest access.
 func NormalizeAccessByNamespace(access []Access) []Access {
 	combined := make(map[string]Access)
 
@@ -58,6 +63,7 @@ func NormalizeAccessByNamespace(access []Access) []Access {
 	return result
 }
 
+// AccessGroupNames returns sorted distinct LDAP group names from access.
 func AccessGroupNames(access []Access) []string {
 	seen := make(map[string]struct{})
 	groups := make([]string, 0, len(access))
@@ -75,6 +81,7 @@ func AccessGroupNames(access []Access) []string {
 	return groups
 }
 
+// CloneAccess returns a shallow copy of access.
 func CloneAccess(access []Access) []Access {
 	if len(access) == 0 {
 		return nil
@@ -85,6 +92,7 @@ func CloneAccess(access []Access) []Access {
 	return cloned
 }
 
+// HasIngestWriteAccess reports whether access permits writes to indexName.
 func HasIngestWriteAccess(access []Access, indexName string) bool {
 	for _, item := range NormalizeAccessByNamespace(access) {
 		if item.Namespace == indexName && !item.PullOnly {
@@ -94,6 +102,7 @@ func HasIngestWriteAccess(access []Access, indexName string) bool {
 	return false
 }
 
+// RoleModeForAccess converts access into the gateway's role suffix.
 func RoleModeForAccess(access Access) string {
 	switch {
 	case !access.PullOnly && access.DeleteAllowed:
@@ -107,10 +116,12 @@ func RoleModeForAccess(access Access) string {
 	}
 }
 
+// BuildGatewayRoleName builds the deterministic security role name.
 func BuildGatewayRoleName(namespace, mode string) string {
 	return "gateway_" + namespace + "_" + mode
 }
 
+// AllowedActionsForAccess maps a role mode to OpenSearch allowed actions.
 func AllowedActionsForAccess(mode string) []string {
 	switch mode {
 	case "rwd":

@@ -1,3 +1,5 @@
+// Package ingest contains ingest-route parsing, document validation, and
+// short-lived LDAP auth caching for the ingest endpoint.
 package ingest
 
 import (
@@ -16,7 +18,9 @@ import (
 )
 
 const (
-	CacheTTL          = 5 * time.Minute
+	// CacheTTL is the lifetime of successful Basic Auth LDAP cache entries.
+	CacheTTL = 5 * time.Minute
+	// MaxIndexNameBytes is the maximum OpenSearch alias or index name length.
 	MaxIndexNameBytes = 255
 	rolloverSuffix    = "-rollover"
 	backingIndexSeed  = "-000001"
@@ -24,9 +28,11 @@ const (
 
 var (
 	indexNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
+	// ErrRouteNotFound reports a path that does not target /ingest.
 	ErrRouteNotFound = errors.New("route not found")
 )
 
+// AuthCache caches successful LDAP-backed ingest authorizations.
 type AuthCache struct {
 	mu       sync.Mutex
 	now      func() time.Time
@@ -37,6 +43,7 @@ type AuthCache struct {
 	expired  uint64
 }
 
+// AuthCacheStats describes current cache counters and live entry count.
 type AuthCacheStats struct {
 	Hits    uint64
 	Misses  uint64
@@ -56,27 +63,29 @@ type authCacheCall struct {
 	err   error
 }
 
+// NewAuthCache constructs an empty ingest auth cache.
 func NewAuthCache() *AuthCache {
 	return &AuthCache{
-		now: func() time.Time {
-			return time.Now()
-		},
+		now:      time.Now,
 		entries:  make(map[string]authCacheEntry),
 		inflight: make(map[string]*authCacheCall),
 	}
 }
 
+// SetNow overrides the cache clock, which is primarily useful for tests.
 func (c *AuthCache) SetNow(now func() time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.now = now
 }
 
+// AuthCacheKey returns a stable, non-reversible cache key for credentials.
 func AuthCacheKey(username, password string) string {
 	sum := sha256.Sum256([]byte(username + ":" + password))
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
+// Resolve returns cached access for key or fetches, stores, and returns it.
 func (c *AuthCache) Resolve(key string, fetch func() (string, []authz.Access, error)) (string, []authz.Access, bool, error) {
 	if c == nil {
 		username, access, err := fetch()
@@ -137,6 +146,7 @@ func (c *AuthCache) Resolve(key string, fetch func() (string, []authz.Access, er
 	return username, authz.CloneAccess(access), false, nil
 }
 
+// Stats returns the current cache counters and entry count.
 func (c *AuthCache) Stats() AuthCacheStats {
 	if c == nil {
 		return AuthCacheStats{}
@@ -153,6 +163,7 @@ func (c *AuthCache) Stats() AuthCacheStats {
 	}
 }
 
+// ParsePath validates and extracts the index name from /ingest/<index>[/].
 func ParsePath(path string) (string, error) {
 	if !strings.HasPrefix(path, "/ingest/") {
 		return "", ErrRouteNotFound
@@ -172,6 +183,7 @@ func ParsePath(path string) (string, error) {
 	return indexName, nil
 }
 
+// DecodeJSONObject decodes exactly one top-level JSON object from body.
 func DecodeJSONObject(body io.Reader) (map[string]any, error) {
 	decoder := json.NewDecoder(body)
 
@@ -199,6 +211,7 @@ func DecodeJSONObject(body io.Reader) (map[string]any, error) {
 	return object, nil
 }
 
+// ParseEventTime validates and parses the required event_time field.
 func ParseEventTime(document map[string]any) (time.Time, error) {
 	rawValue, ok := document["event_time"]
 	if !ok {
@@ -220,14 +233,17 @@ func ParseEventTime(document map[string]any) (time.Time, error) {
 	return parsed.UTC(), nil
 }
 
+// BuildWriteAlias derives the daily rollover alias for indexName and eventTime.
 func BuildWriteAlias(indexName string, eventTime time.Time) string {
 	return fmt.Sprintf("%s-%s%s", indexName, eventTime.UTC().Format("20060102"), rolloverSuffix)
 }
 
+// BuildFirstBackingIndex returns the initial backing index name for alias.
 func BuildFirstBackingIndex(alias string) string {
 	return alias + backingIndexSeed
 }
 
+// ValidIndexName reports whether indexName is safe for OpenSearch routing.
 func ValidIndexName(indexName string) bool {
 	return indexNamePattern.MatchString(indexName)
 }

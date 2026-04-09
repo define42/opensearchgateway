@@ -40,6 +40,12 @@ jobs:
       - name: Build
         run: make all
 
+      - name: Lint
+        run: make lint
+
+      - name: gosec
+        run: make gosec
+
       - name: Run tests with coverage
         run: go test ./... -coverpkg=./... -coverprofile=coverage.out
 

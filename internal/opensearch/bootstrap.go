@@ -8,6 +8,7 @@ import (
 	"reflect"
 )
 
+// EnsureISMPolicy creates or updates the shared rollover ISM policy.
 func (c *Client) EnsureISMPolicy(ctx context.Context, policyID string, minDocCount int) error {
 	path := "/_plugins/_ism/policies/" + url.PathEscape(policyID)
 	desired := ISMPolicyRequest{
@@ -31,6 +32,7 @@ func (c *Client) EnsureISMPolicy(ctx context.Context, policyID string, minDocCou
 	return c.DoJSON(ctx, http.MethodPut, updatePath, desired, nil, []int{http.StatusOK, http.StatusCreated})
 }
 
+// EnsureIndexTemplate upserts the shared rollover index template.
 func (c *Client) EnsureIndexTemplate(ctx context.Context, templateName string) error {
 	body := map[string]any{
 		"index_patterns": []string{"*-*-rollover-*"},
@@ -53,6 +55,7 @@ func (c *Client) EnsureIndexTemplate(ctx context.Context, templateName string) e
 	return c.DoJSON(ctx, http.MethodPut, "/_index_template/"+url.PathEscape(templateName), body, nil, []int{http.StatusOK, http.StatusCreated})
 }
 
+// BuildISMPolicy returns the rollover policy used for gateway-managed aliases.
 func BuildISMPolicy(minDocCount int) ISMPolicy {
 	return ISMPolicy{
 		Description:  "Generic rollover at 100M docs",

@@ -20,21 +20,23 @@ import (
 	goldap "github.com/go-ldap/ldap/v3"
 )
 
-type Config = appconfig.Config
-type LDAPConfig = appconfig.LDAPConfig
-type User = authzpkg.User
-type Access = authzpkg.Access
-type ldapAuthenticator = serverpkg.AuthenticateFunc
-type sessionData = sessionpkg.Data
-type ingestResponse = serverpkg.IngestResponse
-type errorResponse = serverpkg.ErrorResponse
-type loginPageData = serverpkg.LoginPageData
-type ResponseError = opensearchpkg.ResponseError
-type dashboardsFindResponse = opensearchpkg.DashboardsFindResponse
-type securityRoleRequest = opensearchpkg.SecurityRoleRequest
-type ismPolicyResponse = opensearchpkg.ISMPolicyResponse
-type ismPolicy = opensearchpkg.ISMPolicy
-type ingestAuthCache = ingestpkg.AuthCache
+type (
+	Config                 = appconfig.Config
+	LDAPConfig             = appconfig.LDAPConfig
+	User                   = authzpkg.User
+	Access                 = authzpkg.Access
+	ldapAuthenticator      = serverpkg.AuthenticateFunc
+	sessionData            = sessionpkg.Data
+	ingestResponse         = serverpkg.IngestResponse
+	errorResponse          = serverpkg.ErrorResponse
+	loginPageData          = serverpkg.LoginPageData
+	ResponseError          = opensearchpkg.ResponseError
+	dashboardsFindResponse = opensearchpkg.DashboardsFindResponse
+	securityRoleRequest    = opensearchpkg.SecurityRoleRequest
+	ismPolicyResponse      = opensearchpkg.ISMPolicyResponse
+	ismPolicy              = opensearchpkg.ISMPolicy
+	ingestAuthCache        = ingestpkg.AuthCache
+)
 
 const (
 	defaultPassword      = "Cedar7!FluxOrbit29"
@@ -54,17 +56,18 @@ var (
 	errLDAPInvalidCredentials = ldappkg.ErrInvalidCredentials
 	errLDAPUnauthorized       = ldappkg.ErrUnauthorized
 	errReservedInternalUser   = opensearchpkg.ErrReservedInternalUser
-	ldapCfg                   = appconfig.LoadLDAP()
 )
 
 type Client struct {
 	*opensearchpkg.Client
+
 	ensuredTenants   *sync.Map
 	ensuredDataViews *sync.Map
 }
 
 type Gateway struct {
 	*serverpkg.Gateway
+
 	sessions        *sessionpkg.Store
 	ingestAuthCache *ingestpkg.AuthCache
 }
@@ -84,12 +87,8 @@ func getenv(key, fallback string) string {
 	return fallback
 }
 
-func loadLDAPConfig() LDAPConfig {
-	return appconfig.LoadLDAP()
-}
-
 func ldapAuthenticateAccess(username, password string) (*User, []Access, error) {
-	return ldappkg.New(ldapCfg).AuthenticateAccess(username, password)
+	return ldappkg.New(appconfig.LoadLDAP()).AuthenticateAccess(username, password)
 }
 
 func newClient(cfg Config) *Client {

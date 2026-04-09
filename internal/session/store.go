@@ -1,3 +1,4 @@
+// Package session stores authenticated Dashboards sessions in memory.
 package session
 
 import (
@@ -12,6 +13,7 @@ import (
 
 const idleTTL = 30 * time.Minute
 
+// Data holds the server-side metadata associated with one session.
 type Data struct {
 	User       *authz.User
 	Access     []authz.Access
@@ -21,17 +23,20 @@ type Data struct {
 	ExpiresAt  time.Time
 }
 
+// Store keeps gateway sessions in memory with idle expiration.
 type Store struct {
 	mu       sync.Mutex
 	sessions map[string]Data
 }
 
+// NewStore constructs an empty in-memory session store.
 func NewStore() *Store {
 	return &Store{
 		sessions: make(map[string]Data),
 	}
 }
 
+// Create allocates a new session token for data.
 func (s *Store) Create(data Data) (string, time.Time, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -60,6 +65,7 @@ func (s *Store) Create(data Data) (string, time.Time, error) {
 	return "", time.Time{}, errors.New("failed to allocate unique session token")
 }
 
+// Get returns token's session if it exists and has not expired.
 func (s *Store) Get(token string) (Data, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -75,6 +81,7 @@ func (s *Store) Get(token string) (Data, bool) {
 	return session, true
 }
 
+// Touch refreshes token's idle timeout and returns the updated session.
 func (s *Store) Touch(token string) (Data, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -93,12 +100,14 @@ func (s *Store) Touch(token string) (Data, bool) {
 	return session, true
 }
 
+// Delete removes token from the session store.
 func (s *Store) Delete(token string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.sessions, token)
 }
 
+// Set stores token with data, replacing any previous value.
 func (s *Store) Set(token string, data Data) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

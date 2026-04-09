@@ -1,3 +1,4 @@
+// Package config loads environment-backed gateway and LDAP configuration.
 package config
 
 import (
@@ -10,13 +11,19 @@ import (
 )
 
 const (
-	DefaultListenAddr    = ":8080"
+	// DefaultListenAddr is the gateway bind address used when LISTEN_ADDR is unset.
+	DefaultListenAddr = ":8080"
+	// DefaultOpenSearchURL is the default OpenSearch endpoint.
 	DefaultOpenSearchURL = "https://localhost:9200"
+	// DefaultDashboardsURL is the default Dashboards endpoint.
 	DefaultDashboardsURL = "http://localhost:5601"
-	DefaultUsername      = "admin"
-	DefaultTenant        = "admin_tenant"
+	// DefaultUsername is the default upstream admin username.
+	DefaultUsername = "admin"
+	// DefaultTenant is the default Dashboards tenant for generic proxy requests.
+	DefaultTenant = "admin_tenant"
 )
 
+// Config contains runtime settings for OpenSearch, Dashboards, and HTTP serving.
 type Config struct {
 	BaseURL            string
 	Username           string
@@ -31,6 +38,7 @@ type Config struct {
 	HTTPClient         *http.Client
 }
 
+// LDAPConfig contains runtime settings for the gateway's LDAP client.
 type LDAPConfig struct {
 	URL             string
 	BaseDN          string
@@ -42,6 +50,7 @@ type LDAPConfig struct {
 	SkipTLSVerify   bool
 }
 
+// MustParse parses s as a URL and panics on failure.
 func MustParse(s string) *url.URL {
 	u, err := url.Parse(s)
 	if err != nil {
@@ -50,6 +59,7 @@ func MustParse(s string) *url.URL {
 	return u
 }
 
+// DefaultHTTPClient builds the default upstream HTTP client for the gateway.
 func DefaultHTTPClient() *http.Client {
 	transport := &http.Transport{}
 	if getEnvBool("OPENSEARCH_SKIP_TLS_VERIFY", false) {
@@ -62,6 +72,7 @@ func DefaultHTTPClient() *http.Client {
 	}
 }
 
+// LoadGateway loads gateway configuration from the environment.
 func LoadGateway() Config {
 	defaultPassword := getEnv("OPENSEARCH_ADMIN_PASSWORD", "")
 
@@ -80,6 +91,7 @@ func LoadGateway() Config {
 	}
 }
 
+// LoadLDAP loads LDAP configuration from the environment.
 func LoadLDAP() LDAPConfig {
 	return LDAPConfig{
 		URL:             getEnv("LDAP_URL", "ldaps://ldap:389"),

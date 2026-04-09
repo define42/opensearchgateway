@@ -9,20 +9,24 @@ import (
 	"strings"
 )
 
+// DoJSON issues an OpenSearch request against the primary cluster endpoint.
 func (c *Client) DoJSON(ctx context.Context, method, path string, body any, out any, okStatuses []int) error {
 	return c.DoJSONWithRequest(ctx, method, path, body, out, okStatuses, c.NewRequest)
 }
 
+// DoDashboardsJSON issues a request against Dashboards in the default tenant.
 func (c *Client) DoDashboardsJSON(ctx context.Context, method, path string, body any, out any, okStatuses []int) error {
 	return c.DoJSONWithRequest(ctx, method, path, body, out, okStatuses, c.NewDashboardsRequest)
 }
 
+// DoDashboardsJSONInTenant issues a Dashboards request with an explicit tenant.
 func (c *Client) DoDashboardsJSONInTenant(ctx context.Context, tenantName, method, path string, body any, out any, okStatuses []int) error {
 	return c.DoJSONWithRequest(ctx, method, path, body, out, okStatuses, func(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
 		return c.NewDashboardsRequestForTenant(ctx, tenantName, method, path, body)
 	})
 }
 
+// DoJSONWithRequest sends a JSON request using the provided request builder.
 func (c *Client) DoJSONWithRequest(ctx context.Context, method, path string, body any, out any, okStatuses []int, buildRequest func(context.Context, string, string, io.Reader) (*http.Request, error)) error {
 	var reader io.Reader
 	if body != nil {
@@ -66,14 +70,17 @@ func (c *Client) DoJSONWithRequest(ctx context.Context, method, path string, bod
 	return nil
 }
 
+// NewRequest creates an OpenSearch API request using the primary base URL.
 func (c *Client) NewRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
 	return c.NewRequestForBase(ctx, c.Config.BaseURL, method, path, body, c.Config.Username, c.Config.Password, nil)
 }
 
+// NewDashboardsRequest creates a Dashboards API request for the default tenant.
 func (c *Client) NewDashboardsRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
 	return c.NewDashboardsRequestForTenant(ctx, c.Config.DashboardsTenant, method, path, body)
 }
 
+// NewDashboardsRequestForTenant creates a Dashboards API request for tenantName.
 func (c *Client) NewDashboardsRequestForTenant(ctx context.Context, tenantName, method, path string, body io.Reader) (*http.Request, error) {
 	headers := map[string]string{
 		"osd-xsrf": "true",
@@ -85,6 +92,7 @@ func (c *Client) NewDashboardsRequestForTenant(ctx context.Context, tenantName, 
 	return c.NewRequestForBase(ctx, c.Config.DashboardsURL, method, DashboardsAPIPath(path), body, c.Config.DashboardsUsername, c.Config.DashboardsPassword, headers)
 }
 
+// NewRequestForBase builds an authenticated request against baseURL.
 func (c *Client) NewRequestForBase(ctx context.Context, baseURL, method, path string, body io.Reader, username, password string, headers map[string]string) (*http.Request, error) {
 	base := strings.TrimRight(baseURL, "/")
 	req, err := http.NewRequestWithContext(ctx, method, base+path, body)
