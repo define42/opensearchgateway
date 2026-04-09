@@ -422,7 +422,8 @@ That example works because `ingestuser` has LDAP group `team10_rw`. If the LDAP 
 
 ## Project Files
 
-- [main.go](/home/define42/git/OpenSearchGateway/main.go): gateway server, bootstrap logic, OpenSearch client helpers, demo page
+- [main.go](/home/define42/git/OpenSearchGateway/main.go): gateway server, bootstrap logic, and OpenSearch client helpers
+- [templates/demo.html](/home/define42/git/OpenSearchGateway/templates/demo.html): embedded demo ingest page served at `/demo`
 - [main_test.go](/home/define42/git/OpenSearchGateway/main_test.go): request flow and bootstrap tests
 - [docker-compose.yml](/home/define42/git/OpenSearchGateway/docker-compose.yml): local OpenSearch, Dashboards, and gateway stack
 - [Dockerfile](/home/define42/git/OpenSearchGateway/Dockerfile): container image for the gateway
