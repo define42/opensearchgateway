@@ -102,7 +102,7 @@ func TestRunReturnsBootstrapFailures(t *testing.T) {
 
 func TestGatewayRootAndDemoCoverage(t *testing.T) {
 	gateway := testGatewayHandler(Config{})
-	rawGateway := newGateway(&Client{cfg: Config{}}, nil)
+	rawGateway := newGateway(newClient(Config{}), nil)
 
 	t.Run("root head redirects", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
@@ -160,7 +160,7 @@ func TestGatewayRootAndDemoCoverage(t *testing.T) {
 
 func TestGatewayLogoutCoverage(t *testing.T) {
 	gateway := testGatewayHandler(Config{})
-	rawGateway := newGateway(&Client{cfg: Config{}}, nil)
+	rawGateway := newGateway(newClient(Config{}), nil)
 
 	t.Run("logout wrong method", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
@@ -202,7 +202,7 @@ func TestGatewayLogoutCoverage(t *testing.T) {
 
 func TestGatewayDashboardsCoverage(t *testing.T) {
 	t.Run("path not found", func(t *testing.T) {
-		gateway := newGateway(&Client{cfg: Config{}}, nil)
+		gateway := newGateway(newClient(Config{}), nil)
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodGet, "/dashboards-nope", nil)
 		gateway.handleDashboards(recorder, request)
@@ -213,7 +213,7 @@ func TestGatewayDashboardsCoverage(t *testing.T) {
 	})
 
 	t.Run("proxy error returns bad gateway", func(t *testing.T) {
-		gateway := newGateway(&Client{cfg: Config{DashboardsURL: "://bad"}}, nil)
+		gateway := newGateway(newClient(Config{DashboardsURL: "://bad"}), nil)
 		token, expiresAt, err := gateway.sessions.Create(sessionData{
 			User:       &User{Name: "alice"},
 			Namespaces: []string{"team1"},
@@ -326,7 +326,7 @@ func TestRenderLoginPageWriterFailure(t *testing.T) {
 	_ = gateway
 
 	writer := &failingResponseWriter{header: make(http.Header)}
-	newGateway(&Client{cfg: Config{}}, nil).renderLoginPage(writer, http.StatusOK, loginPageData{Username: "alice"})
+	newGateway(newClient(Config{}), nil).renderLoginPage(writer, http.StatusOK, loginPageData{Username: "alice"})
 }
 
 func TestDecodeJSONObjectCoverage(t *testing.T) {
@@ -341,7 +341,7 @@ func TestDecodeJSONObjectCoverage(t *testing.T) {
 
 func TestProvisionAndSecurityHelpersCoverage(t *testing.T) {
 	t.Run("provision login user without access", func(t *testing.T) {
-		client := &Client{cfg: Config{}}
+		client := newClient(Config{})
 		if _, err := client.ProvisionLoginUser(context.Background(), "alice", "secret", nil); err == nil {
 			t.Fatal("expected missing-access error")
 		}
@@ -356,7 +356,7 @@ func TestProvisionAndSecurityHelpersCoverage(t *testing.T) {
 		}))
 		defer openSearch.Close()
 
-		client := &Client{cfg: testConfig(openSearch)}
+		client := newClient(testConfig(openSearch))
 		_, err := client.ProvisionLoginUser(context.Background(), "alice", "secret", []Access{
 			{Group: "bad_rw", Namespace: "bad.namespace"},
 		})
@@ -372,7 +372,7 @@ func TestProvisionAndSecurityHelpersCoverage(t *testing.T) {
 		}))
 		defer openSearch.Close()
 
-		client := &Client{cfg: testConfig(openSearch)}
+		client := newClient(testConfig(openSearch))
 		if err := client.ensureInternalUserWritable(context.Background(), "alice"); err != nil {
 			t.Fatalf("expected nil error, got %v", err)
 		}
@@ -385,7 +385,7 @@ func TestProvisionAndSecurityHelpersCoverage(t *testing.T) {
 		}))
 		defer openSearch.Close()
 
-		client := &Client{cfg: testConfig(openSearch)}
+		client := newClient(testConfig(openSearch))
 		err := client.ensureInternalUserWritable(context.Background(), "alice")
 		if !errors.Is(err, errReservedInternalUser) {
 			t.Fatalf("expected reserved/hidden error, got %v", err)
@@ -398,7 +398,7 @@ func TestProvisionAndSecurityHelpersCoverage(t *testing.T) {
 		}))
 		defer openSearch.Close()
 
-		client := &Client{cfg: testConfig(openSearch)}
+		client := newClient(testConfig(openSearch))
 		if err := client.EnsureSecurityRole(context.Background(), "gateway_team1_rw", Access{Namespace: "team1"}); err == nil {
 			t.Fatal("expected EnsureSecurityRole to fail")
 		}
@@ -413,7 +413,7 @@ func TestProvisionAndSecurityHelpersCoverage(t *testing.T) {
 		}))
 		defer openSearch.Close()
 
-		client := &Client{cfg: testConfig(openSearch)}
+		client := newClient(testConfig(openSearch))
 		if err := client.UpsertInternalUser(context.Background(), "alice", "secret", []string{"kibana_user"}, []string{"team1_rw"}, []string{"team1"}); err != nil {
 			t.Fatalf("UpsertInternalUser returned error: %v", err)
 		}
@@ -428,7 +428,7 @@ func TestProvisionAndSecurityHelpersCoverage(t *testing.T) {
 
 func TestTenantAndDashboardsClientCoverage(t *testing.T) {
 	t.Run("ensure tenant without dashboards url is noop", func(t *testing.T) {
-		client := &Client{cfg: Config{}}
+		client := newClient(Config{})
 		if err := client.EnsureTenant(context.Background(), "orders"); err != nil {
 			t.Fatalf("expected nil error, got %v", err)
 		}
@@ -442,7 +442,7 @@ func TestTenantAndDashboardsClientCoverage(t *testing.T) {
 
 		cfg := testConfig(openSearch)
 		cfg.DashboardsURL = "http://dashboards.example"
-		client := &Client{cfg: cfg}
+		client := newClient(cfg)
 		client.ensuredTenants.Store("orders", true)
 
 		if err := client.EnsureTenant(context.Background(), "orders"); err != nil {
@@ -451,7 +451,7 @@ func TestTenantAndDashboardsClientCoverage(t *testing.T) {
 	})
 
 	t.Run("ensure dashboard data view without dashboards url is noop", func(t *testing.T) {
-		client := &Client{cfg: Config{}}
+		client := newClient(Config{})
 		if err := client.EnsureDashboardDataView(context.Background(), "orders"); err != nil {
 			t.Fatalf("expected nil error, got %v", err)
 		}
@@ -470,7 +470,7 @@ func TestTenantAndDashboardsClientCoverage(t *testing.T) {
 
 		cfg := testConfig(openSearch)
 		cfg.DashboardsURL = "http://dashboards.example"
-		client := &Client{cfg: cfg}
+		client := newClient(cfg)
 		client.ensuredDataViews.Store("orders/"+buildDataViewID("orders"), true)
 
 		if err := client.EnsureDashboardDataView(context.Background(), "orders"); err != nil {
@@ -484,12 +484,12 @@ func TestTenantAndDashboardsClientCoverage(t *testing.T) {
 		}))
 		defer dashboards.Close()
 
-		client := &Client{cfg: Config{
+		client := newClient(Config{
 			DashboardsURL:      dashboards.URL,
 			DashboardsUsername: "admin",
 			DashboardsPassword: "secret",
 			HTTPClient:         dashboards.Client(),
-		}}
+		})
 		err := client.setDashboardsDefaultIndex(context.Background(), "team1", buildDataViewID("team1"))
 		if err == nil || !strings.Contains(err.Error(), `tenant "team1"`) {
 			t.Fatalf("expected tenant-scoped default index error, got %v", err)
@@ -510,13 +510,13 @@ func TestTenantAndDashboardsClientCoverage(t *testing.T) {
 		}))
 		defer dashboards.Close()
 
-		client := &Client{cfg: Config{
+		client := newClient(Config{
 			DashboardsURL:      dashboards.URL,
 			DashboardsUsername: "admin",
 			DashboardsPassword: "secret",
 			DashboardsTenant:   "admin_tenant",
 			HTTPClient:         dashboards.Client(),
-		}}
+		})
 		if err := client.doDashboardsJSON(context.Background(), http.MethodPost, "/api/test", map[string]any{"hello": "world"}, nil, []int{http.StatusOK}); err != nil {
 			t.Fatalf("doDashboardsJSON returned error: %v", err)
 		}
@@ -529,11 +529,11 @@ func TestTenantAndDashboardsClientCoverage(t *testing.T) {
 	})
 
 	t.Run("new dashboards request without tenant header when empty", func(t *testing.T) {
-		client := &Client{cfg: Config{
+		client := newClient(Config{
 			DashboardsURL:      "http://dashboards.example",
 			DashboardsUsername: "admin",
 			DashboardsPassword: "secret",
-		}}
+		})
 		req, err := client.newDashboardsRequest(context.Background(), http.MethodGet, "api/test", nil)
 		if err != nil {
 			t.Fatalf("newDashboardsRequest returned error: %v", err)
@@ -554,7 +554,7 @@ func TestClientHelperCoverage(t *testing.T) {
 		}))
 		defer openSearch.Close()
 
-		client := &Client{cfg: testConfig(openSearch)}
+		client := newClient(testConfig(openSearch))
 		_, err := client.aliasExists(context.Background(), "orders-20241230-rollover")
 		if err == nil {
 			t.Fatal("expected aliasExists to fail")
@@ -567,7 +567,7 @@ func TestClientHelperCoverage(t *testing.T) {
 	})
 
 	t.Run("do json with request returns marshal error", func(t *testing.T) {
-		client := &Client{cfg: Config{HTTPClient: http.DefaultClient}}
+		client := newClient(Config{HTTPClient: http.DefaultClient})
 		err := client.doJSONWithRequest(context.Background(), http.MethodPost, "/broken", map[string]any{"bad": make(chan int)}, nil, []int{http.StatusOK}, func(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
 			t.Fatal("request builder should not be called when json marshal fails")
 			return nil, nil
@@ -578,7 +578,7 @@ func TestClientHelperCoverage(t *testing.T) {
 	})
 
 	t.Run("do json with request returns builder error", func(t *testing.T) {
-		client := &Client{cfg: Config{HTTPClient: http.DefaultClient}}
+		client := newClient(Config{HTTPClient: http.DefaultClient})
 		wantErr := errors.New("build failed")
 		err := client.doJSONWithRequest(context.Background(), http.MethodGet, "/broken", nil, nil, []int{http.StatusOK}, func(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
 			return nil, wantErr
@@ -590,7 +590,7 @@ func TestClientHelperCoverage(t *testing.T) {
 }
 
 func TestDashboardsResponseAndHelperCoverage(t *testing.T) {
-	gateway := newGateway(&Client{cfg: Config{}}, nil)
+	gateway := newGateway(newClient(Config{}), nil)
 
 	t.Run("modify dashboards response invalid json is preserved", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/dashboards/api/saved_objects/_find?type=index-pattern", nil)
@@ -700,7 +700,7 @@ func TestDashboardsResponseAndHelperCoverage(t *testing.T) {
 
 func TestDecodeAndSessionHelpersCoverage(t *testing.T) {
 	t.Run("session store create and touch branches", func(t *testing.T) {
-		store := &sessionStore{}
+		store := newSessionStore()
 		token, expiresAt, err := store.Create(sessionData{User: &User{Name: "alice"}})
 		if err != nil {
 			t.Fatalf("Create returned error: %v", err)
@@ -713,11 +713,11 @@ func TestDecodeAndSessionHelpersCoverage(t *testing.T) {
 			t.Fatal("expected missing session touch to fail")
 		}
 
-		store.sessions["expired"] = sessionData{ExpiresAt: time.Now().Add(-time.Minute)}
+		store.Set("expired", sessionData{ExpiresAt: time.Now().Add(-time.Minute)})
 		if _, ok := store.Touch("expired"); ok {
 			t.Fatal("expected expired session touch to fail")
 		}
-		if _, ok := store.sessions["expired"]; ok {
+		if _, ok := store.Get("expired"); ok {
 			t.Fatal("expected expired session to be removed")
 		}
 	})

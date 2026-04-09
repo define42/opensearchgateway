@@ -422,9 +422,11 @@ That example works because `ingestuser` has LDAP group `team10_rw`. If the LDAP 
 
 ## Project Files
 
-- [main.go](/home/define42/git/OpenSearchGateway/main.go): gateway server, bootstrap logic, and OpenSearch client helpers
-- [templates/login.html](/home/define42/git/OpenSearchGateway/templates/login.html): embedded login page served at `/login`
-- [templates/demo.html](/home/define42/git/OpenSearchGateway/templates/demo.html): embedded demo ingest page served at `/demo`
+- [main.go](/home/define42/git/OpenSearchGateway/main.go): thin entrypoint that loads config, bootstraps dependencies, and starts the HTTP server
+- [internal/server/templates/login.html](/home/define42/git/OpenSearchGateway/internal/server/templates/login.html): embedded login page served at `/login`
+- [internal/server/templates/demo.html](/home/define42/git/OpenSearchGateway/internal/server/templates/demo.html): embedded demo ingest page served at `/demo`
+- [internal/opensearch](/home/define42/git/OpenSearchGateway/internal/opensearch): OpenSearch and Dashboards client logic
+- [internal/server](/home/define42/git/OpenSearchGateway/internal/server): HTTP routes, sessions, Dashboards proxy, and browser responses
 - [main_test.go](/home/define42/git/OpenSearchGateway/main_test.go): request flow and bootstrap tests
 - [docker-compose.yml](/home/define42/git/OpenSearchGateway/docker-compose.yml): local OpenSearch, Dashboards, and gateway stack
 - [Dockerfile](/home/define42/git/OpenSearchGateway/Dockerfile): container image for the gateway

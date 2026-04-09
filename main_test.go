@@ -96,7 +96,7 @@ func TestEnsureISMPolicySkipsWhenExistingMatches(t *testing.T) {
 	}))
 	defer openSearch.Close()
 
-	client := &Client{cfg: testConfig(openSearch)}
+	client := newClient(testConfig(openSearch))
 	if err := client.EnsureISMPolicy(context.Background(), ismPolicyID, 100000000); err != nil {
 		t.Fatalf("EnsureISMPolicy returned error: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestEnsureISMPolicyUpdatesWhenExistingDiffers(t *testing.T) {
 	}))
 	defer openSearch.Close()
 
-	client := &Client{cfg: testConfig(openSearch)}
+	client := newClient(testConfig(openSearch))
 	if err := client.EnsureISMPolicy(context.Background(), ismPolicyID, 100000000); err != nil {
 		t.Fatalf("EnsureISMPolicy returned error: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestEnsureTenantCreatesWhenMissing(t *testing.T) {
 	cfg := testConfig(openSearch)
 	cfg.DashboardsURL = "http://dashboards.example"
 
-	client := &Client{cfg: cfg}
+	client := newClient(cfg)
 	if err := client.EnsureTenant(context.Background(), "orders"); err != nil {
 		t.Fatalf("EnsureTenant returned error: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestEnsureTenantSkipsWhenExisting(t *testing.T) {
 	cfg := testConfig(openSearch)
 	cfg.DashboardsURL = "http://dashboards.example"
 
-	client := &Client{cfg: cfg}
+	client := newClient(cfg)
 	if err := client.EnsureTenant(context.Background(), "orders"); err != nil {
 		t.Fatalf("EnsureTenant returned error: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestEnsureTenantReturnsErrorOnFailure(t *testing.T) {
 	cfg := testConfig(openSearch)
 	cfg.DashboardsURL = "http://dashboards.example"
 
-	client := &Client{cfg: cfg}
+	client := newClient(cfg)
 	if err := client.EnsureTenant(context.Background(), "orders"); err == nil {
 		t.Fatal("expected EnsureTenant to fail")
 	}
@@ -294,7 +294,7 @@ func TestEnsureDashboardDataViewCreatesExpectedPattern(t *testing.T) {
 	}))
 	defer dashboards.Close()
 
-	client := &Client{cfg: testConfigWithDashboards(openSearch, dashboards)}
+	client := newClient(testConfigWithDashboards(openSearch, dashboards))
 
 	if err := client.EnsureDashboardDataView(context.Background(), "orders"); err != nil {
 		t.Fatalf("EnsureDashboardDataView returned error: %v", err)
@@ -504,7 +504,7 @@ func TestGatewayIngestBasePathReturnsNotFound(t *testing.T) {
 func TestGatewayAuthenticatedLoginRedirectsToDashboards(t *testing.T) {
 	t.Parallel()
 
-	gateway := newGateway(&Client{cfg: Config{}}, nil)
+	gateway := newGateway(newClient(Config{}), nil)
 	token, expiresAt, err := gateway.sessions.Create(sessionData{
 		User:       &User{Name: "alice"},
 		Namespaces: []string{"team1"},
@@ -878,7 +878,7 @@ func TestGatewayDashboardsProxyForwardsSessionBasicAuth(t *testing.T) {
 	}))
 	defer dashboards.Close()
 
-	gateway := newGateway(&Client{cfg: testConfigWithDashboards(openSearch, dashboards)}, nil)
+	gateway := newGateway(newClient(testConfigWithDashboards(openSearch, dashboards)), nil)
 	token, expiresAt, err := gateway.sessions.Create(sessionData{
 		User:       &User{Name: "testuser"},
 		AuthHeader: buildBasicAuthorization("testuser", "dogood"),
@@ -927,7 +927,7 @@ func TestGatewayDashboardsProxyDoesNotAutoSelectTenantForMultiNamespaceSession(t
 	}))
 	defer dashboards.Close()
 
-	gateway := newGateway(&Client{cfg: testConfigWithDashboards(openSearch, dashboards)}, nil)
+	gateway := newGateway(newClient(testConfigWithDashboards(openSearch, dashboards)), nil)
 	token, expiresAt, err := gateway.sessions.Create(sessionData{
 		User:       &User{Name: "testuser"},
 		AuthHeader: buildBasicAuthorization("testuser", "dogood"),
@@ -971,7 +971,7 @@ func TestGatewayDashboardsProxySynthesizesTenantIndexPatternFindResults(t *testi
 	}))
 	defer dashboards.Close()
 
-	gateway := newGateway(&Client{cfg: testConfigWithDashboards(openSearch, dashboards)}, nil)
+	gateway := newGateway(newClient(testConfigWithDashboards(openSearch, dashboards)), nil)
 	token, expiresAt, err := gateway.sessions.Create(sessionData{
 		User:       &User{Name: "testuser"},
 		AuthHeader: buildBasicAuthorization("testuser", "dogood"),
@@ -1021,7 +1021,7 @@ func TestGatewayDashboardsProxyLeavesNonEmptyIndexPatternFindResultsUntouched(t 
 	}))
 	defer dashboards.Close()
 
-	gateway := newGateway(&Client{cfg: testConfigWithDashboards(openSearch, dashboards)}, nil)
+	gateway := newGateway(newClient(testConfigWithDashboards(openSearch, dashboards)), nil)
 	token, expiresAt, err := gateway.sessions.Create(sessionData{
 		User:       &User{Name: "testuser"},
 		AuthHeader: buildBasicAuthorization("testuser", "dogood"),
@@ -1058,7 +1058,7 @@ func TestGatewayLogoutClearsSession(t *testing.T) {
 	}))
 	defer dashboards.Close()
 
-	gateway := newGateway(&Client{cfg: testConfigWithDashboards(openSearch, dashboards)}, nil)
+	gateway := newGateway(newClient(testConfigWithDashboards(openSearch, dashboards)), nil)
 	token, expiresAt, err := gateway.sessions.Create(sessionData{
 		User:       &User{Name: "testuser"},
 		AuthHeader: buildBasicAuthorization("testuser", "dogood"),
@@ -1097,12 +1097,12 @@ func TestGatewayLogoutClearsSession(t *testing.T) {
 func TestGatewayExpiredSessionRedirectsToLogin(t *testing.T) {
 	t.Parallel()
 
-	gateway := newGateway(&Client{cfg: Config{DashboardsURL: "http://dashboards.example"}}, nil)
-	gateway.sessions.sessions["expired"] = sessionData{
+	gateway := newGateway(newClient(Config{DashboardsURL: "http://dashboards.example"}), nil)
+	gateway.sessions.Set("expired", sessionData{
 		User:       &User{Name: "testuser"},
 		AuthHeader: buildBasicAuthorization("testuser", "dogood"),
 		ExpiresAt:  time.Now().Add(-time.Minute),
-	}
+	})
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/dashboards/app/home", nil)
@@ -1229,7 +1229,7 @@ func TestGatewayIngestUsesAuthenticatedSessionAccess(t *testing.T) {
 	}))
 	defer openSearch.Close()
 
-	gateway := newGateway(&Client{cfg: testConfig(openSearch)}, func(username, password string) (*User, []Access, error) {
+	gateway := newGateway(newClient(testConfig(openSearch)), func(username, password string) (*User, []Access, error) {
 		t.Fatalf("session-backed ingest should not call LDAP authenticate")
 		return nil, nil, nil
 	})
@@ -1716,7 +1716,7 @@ func testGatewayHandler(cfg Config) http.Handler {
 }
 
 func testGatewayHandlerWithAuth(cfg Config, authenticate ldapAuthenticator) http.Handler {
-	return newGateway(&Client{cfg: cfg}, authenticate).Handler()
+	return newGateway(newClient(cfg), authenticate).Handler()
 }
 
 func defaultTestLDAPAuthenticator(username, password string) (*User, []Access, error) {

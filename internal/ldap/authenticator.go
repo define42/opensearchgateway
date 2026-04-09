@@ -1,4 +1,4 @@
-package main
+package ldap
 
 import (
 	"crypto/tls"
@@ -6,32 +6,41 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/go-ldap/ldap/v3"
+	"github.com/define42/opensearchgateway/internal/authz"
+	"github.com/define42/opensearchgateway/internal/config"
+	goldap "github.com/go-ldap/ldap/v3"
 )
 
 var (
-	errLDAPInvalidCredentials = errors.New("ldap invalid credentials")
-	errLDAPUserNotFound       = errors.New("ldap user not found")
-	errLDAPUnauthorized       = errors.New("ldap user has no authorized groups")
+	ErrInvalidCredentials = errors.New("ldap invalid credentials")
+	ErrUserNotFound       = errors.New("ldap user not found")
+	ErrUnauthorized       = errors.New("ldap user has no authorized groups")
 )
 
-func ldapAuthenticateAccess(username, password string) (*User, []Access, error) {
-	conn, err := dialLDAP(ldapCfg)
+type Authenticator struct {
+	cfg config.LDAPConfig
+}
+
+func New(cfg config.LDAPConfig) *Authenticator {
+	return &Authenticator{cfg: cfg}
+}
+
+func (a *Authenticator) AuthenticateAccess(username, password string) (*authz.User, []authz.Access, error) {
+	conn, err := Dial(a.cfg)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer conn.Close()
 
 	mail := username
-	if !strings.Contains(username, "@") && ldapCfg.UserMailDomain != "" {
-		domain := ldapCfg.UserMailDomain
+	if !strings.Contains(username, "@") && a.cfg.UserMailDomain != "" {
+		domain := a.cfg.UserMailDomain
 		if !strings.HasPrefix(domain, "@") {
 			domain = "@" + domain
 		}
 		mail = username + domain
 	}
 
-	// Bind as the user using only the mail/UPN form.
 	bindIDs := []string{mail}
 
 	var bindErr error
@@ -47,17 +56,17 @@ func ldapAuthenticateAccess(username, password string) (*User, []Access, error) 
 		}
 	}
 	if bindErr != nil {
-		if ldap.IsErrorWithCode(bindErr, ldap.LDAPResultInvalidCredentials) {
-			return nil, nil, errLDAPInvalidCredentials
+		if goldap.IsErrorWithCode(bindErr, goldap.LDAPResultInvalidCredentials) {
+			return nil, nil, ErrInvalidCredentials
 		}
 		return nil, nil, fmt.Errorf("ldap bind failed: %w", bindErr)
 	}
 
-	filter := fmt.Sprintf(ldapCfg.UserFilter, mail)
-	searchReq := ldap.NewSearchRequest(
-		ldapCfg.BaseDN,
-		ldap.ScopeWholeSubtree,
-		ldap.NeverDerefAliases, 1, 0, false,
+	filter := fmt.Sprintf(a.cfg.UserFilter, mail)
+	searchReq := goldap.NewSearchRequest(
+		a.cfg.BaseDN,
+		goldap.ScopeWholeSubtree,
+		goldap.NeverDerefAliases, 1, 0, false,
 		filter,
 		nil,
 		nil,
@@ -68,31 +77,27 @@ func ldapAuthenticateAccess(username, password string) (*User, []Access, error) 
 		return nil, nil, fmt.Errorf("ldap search: %w", err)
 	}
 	if len(sr.Entries) == 0 {
-		return nil, nil, fmt.Errorf("%w: %s", errLDAPUserNotFound, mail)
+		return nil, nil, fmt.Errorf("%w: %s", ErrUserNotFound, mail)
 	}
 
 	entry := sr.Entries[0]
-
-	groups := entry.GetAttributeValues(ldapCfg.GroupAttribute)
-	access, user := accessFromGroups(username, groups, ldapCfg.GroupNamePrefix)
+	groups := entry.GetAttributeValues(a.cfg.GroupAttribute)
+	access, user := AccessFromGroups(username, groups, a.cfg.GroupNamePrefix)
 	if user == nil {
-		return nil, nil, fmt.Errorf("%w: %s", errLDAPUnauthorized, username)
+		return nil, nil, fmt.Errorf("%w: %s", ErrUnauthorized, username)
 	}
 
 	return user, access, nil
 }
 
-func dialLDAP(cfg LDAPConfig) (*ldap.Conn, error) {
-
-	// #nosec G402 -- skip TLS verification if configured
-	conn, err := ldap.DialURL(cfg.URL, ldap.DialWithTLSConfig(&tls.Config{InsecureSkipVerify: cfg.SkipTLSVerify}))
+func Dial(cfg config.LDAPConfig) (*goldap.Conn, error) {
+	conn, err := goldap.DialURL(cfg.URL, goldap.DialWithTLSConfig(&tls.Config{InsecureSkipVerify: cfg.SkipTLSVerify})) // #nosec G402
 	if err != nil {
 		return nil, err
 	}
 
 	if cfg.StartTLS && strings.HasPrefix(cfg.URL, "ldap://") {
-		// #nosec G402 -- skip TLS verification if configured
-		if err := conn.StartTLS(&tls.Config{InsecureSkipVerify: cfg.SkipTLSVerify}); err != nil {
+		if err := conn.StartTLS(&tls.Config{InsecureSkipVerify: cfg.SkipTLSVerify}); err != nil { // #nosec G402
 			_ = conn.Close()
 			return nil, err
 		}
@@ -101,29 +106,29 @@ func dialLDAP(cfg LDAPConfig) (*ldap.Conn, error) {
 	return conn, nil
 }
 
-func accessFromGroups(username string, groups []string, prefix string) ([]Access, *User) {
-	var selected *User
-	var access []Access
+func AccessFromGroups(username string, groups []string, prefix string) ([]authz.Access, *authz.User) {
+	var selected *authz.User
+	var access []authz.Access
 
 	for _, g := range groups {
-		groupName := groupNameFromDN(g)
+		groupName := GroupNameFromDN(g)
 		if prefix != "" && !strings.HasPrefix(groupName, prefix) {
 			continue
 		}
 
-		ns, pullOnly, deleteAllowed, ok := permissionsFromGroup(groupName)
+		ns, pullOnly, deleteAllowed, ok := PermissionsFromGroup(groupName)
 		if !ok {
 			continue
 		}
 
-		access = append(access, Access{
+		access = append(access, authz.Access{
 			Group:         groupName,
 			Namespace:     ns,
 			PullOnly:      pullOnly,
 			DeleteAllowed: deleteAllowed,
 		})
 
-		candidate := &User{
+		candidate := &authz.User{
 			Name:          username,
 			Group:         groupName,
 			Namespace:     ns,
@@ -131,7 +136,7 @@ func accessFromGroups(username string, groups []string, prefix string) ([]Access
 			DeleteAllowed: deleteAllowed,
 		}
 
-		if selected == nil || morePermissive(candidate, selected) {
+		if selected == nil || authz.MorePermissive(candidate, selected) {
 			selected = candidate
 		}
 	}
@@ -139,7 +144,7 @@ func accessFromGroups(username string, groups []string, prefix string) ([]Access
 	return access, selected
 }
 
-func groupNameFromDN(dn string) string {
+func GroupNameFromDN(dn string) string {
 	parts := strings.SplitN(dn, ",", 2)
 	if len(parts) == 0 {
 		return dn
@@ -158,7 +163,7 @@ func groupNameFromDN(dn string) string {
 	}
 }
 
-func permissionsFromGroup(group string) (namespace string, pullOnly bool, deleteAllowed bool, ok bool) {
+func PermissionsFromGroup(group string) (namespace string, pullOnly bool, deleteAllowed bool, ok bool) {
 	switch {
 	case strings.HasSuffix(group, "_rwd"):
 		ns := strings.TrimSuffix(group, "_rwd")
@@ -175,14 +180,4 @@ func permissionsFromGroup(group string) (namespace string, pullOnly bool, delete
 	default:
 		return "", false, false, false
 	}
-}
-
-func morePermissive(a, b *User) bool {
-	if a.DeleteAllowed != b.DeleteAllowed {
-		return a.DeleteAllowed
-	}
-	if a.PullOnly != b.PullOnly {
-		return !a.PullOnly
-	}
-	return false
 }

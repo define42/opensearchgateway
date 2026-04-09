@@ -454,7 +454,7 @@ func startIntegrationGateway(ctx context.Context, t *testing.T, cfg Config) (str
 	}
 
 	baseURL := "http://" + listener.Addr().String()
-	client := &Client{cfg: cfg}
+	client := newClient(cfg)
 	if err := client.EnsureISMPolicy(ctx, ismPolicyID, 100000000); err != nil {
 		t.Fatalf("bootstrap ISM policy: %v", err)
 	}

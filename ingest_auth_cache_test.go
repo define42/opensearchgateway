@@ -17,7 +17,7 @@ func TestIngestAuthCacheCachesSuccessfulLookups(t *testing.T) {
 
 	now := time.Date(2026, time.April, 8, 12, 0, 0, 0, time.UTC)
 	cache := newIngestAuthCache()
-	cache.now = func() time.Time { return now }
+	cache.SetNow(func() time.Time { return now })
 
 	lookups := 0
 	key := ingestAuthCacheKey("ingestuser", "dogood")
@@ -67,7 +67,7 @@ func TestIngestAuthCacheExpiresEntries(t *testing.T) {
 
 	now := time.Date(2026, time.April, 8, 12, 0, 0, 0, time.UTC)
 	cache := newIngestAuthCache()
-	cache.now = func() time.Time { return now }
+	cache.SetNow(func() time.Time { return now })
 
 	lookups := 0
 	key := ingestAuthCacheKey("ingestuser", "dogood")
@@ -176,7 +176,7 @@ func TestGatewayIngestBasicAuthUsesLDAPCache(t *testing.T) {
 	defer openSearch.Close()
 
 	var authCalls atomic.Int32
-	gateway := newGateway(&Client{cfg: testConfig(openSearch)}, func(username, password string) (*User, []Access, error) {
+	gateway := newGateway(newClient(testConfig(openSearch)), func(username, password string) (*User, []Access, error) {
 		authCalls.Add(1)
 		return &User{Name: username, Namespace: "team10"}, []Access{
 			{Group: "team10_rw", Namespace: "team10"},
@@ -227,7 +227,7 @@ func TestGatewayIngestBasicAuthDoesNotCacheAuthenticationErrors(t *testing.T) {
 	defer openSearch.Close()
 
 	var authCalls atomic.Int32
-	gateway := newGateway(&Client{cfg: testConfig(openSearch)}, func(username, password string) (*User, []Access, error) {
+	gateway := newGateway(newClient(testConfig(openSearch)), func(username, password string) (*User, []Access, error) {
 		authCalls.Add(1)
 		return nil, nil, errLDAPInvalidCredentials
 	})

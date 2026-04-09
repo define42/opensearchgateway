@@ -15,7 +15,7 @@ RUN go mod download
 
 # Copy source
 COPY *.go ./
-COPY templates ./templates
+COPY internal ./internal
 
 # Build
 RUN go build -o registry-proxy
