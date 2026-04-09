@@ -373,6 +373,7 @@ Useful environment variables:
 - `OPENSEARCH_URL`
 - `OPENSEARCH_USERNAME`
 - `OPENSEARCH_PASSWORD`
+- `OPENSEARCH_SKIP_TLS_VERIFY`
 - `DASHBOARDS_URL`
 - `DASHBOARDS_USERNAME`
 - `DASHBOARDS_PASSWORD`
@@ -392,6 +393,7 @@ Current defaults in the code:
 - `OPENSEARCH_URL=https://localhost:9200`
 - `DASHBOARDS_URL=http://localhost:5601`
 - username defaults to `admin`
+- TLS verification stays enabled by default; set `OPENSEARCH_SKIP_TLS_VERIFY=true` only for local self-signed clusters
 
 Note that per-index data views are created in tenants named after the index, so `DASHBOARDS_TENANT` is not used for those auto-created views. It remains available as the default tenant value for generic Dashboards requests.
 

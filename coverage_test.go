@@ -17,6 +17,7 @@ import (
 )
 
 func TestDefaultHTTPClientAndGetenv(t *testing.T) {
+	t.Setenv("OPENSEARCH_SKIP_TLS_VERIFY", "true")
 	client := defaultHTTPClient()
 	if client.Timeout != 30*time.Second {
 		t.Fatalf("unexpected timeout: %v", client.Timeout)

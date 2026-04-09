@@ -397,6 +397,7 @@ func (g *Gateway) currentSession(r *http.Request) (string, session.Data, bool) {
 }
 
 func (g *Gateway) setSessionCookie(w http.ResponseWriter, r *http.Request, token string, expiresAt time.Time) {
+	// #nosec G124 -- Secure is intentionally enabled only for HTTPS so local HTTP development remains usable.
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionCookieName,
 		Value:    token,
@@ -410,6 +411,7 @@ func (g *Gateway) setSessionCookie(w http.ResponseWriter, r *http.Request, token
 }
 
 func (g *Gateway) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
+	// #nosec G124 -- Secure mirrors setSessionCookie so local HTTP development can still clear sessions correctly.
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionCookieName,
 		Value:    "",

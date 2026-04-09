@@ -45,7 +45,9 @@ func (c *Client) DoJSONWithRequest(ctx context.Context, method, path string, bod
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if !containsStatus(okStatuses, resp.StatusCode) {
 		b, _ := io.ReadAll(resp.Body)

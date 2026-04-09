@@ -132,7 +132,9 @@ func TestDialLDAPStartTLSFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	defer listener.Close()
+	defer func() {
+		_ = listener.Close()
+	}()
 
 	accepted := make(chan struct{})
 	go func() {

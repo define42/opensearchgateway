@@ -14,7 +14,6 @@ const (
 	DefaultOpenSearchURL = "https://localhost:9200"
 	DefaultDashboardsURL = "http://localhost:5601"
 	DefaultUsername      = "admin"
-	DefaultPassword      = "Cedar7!FluxOrbit29"
 	DefaultTenant        = "admin_tenant"
 )
 
@@ -52,22 +51,27 @@ func MustParse(s string) *url.URL {
 }
 
 func DefaultHTTPClient() *http.Client {
+	transport := &http.Transport{}
+	if getEnvBool("OPENSEARCH_SKIP_TLS_VERIFY", false) {
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} // #nosec G402 -- explicit local-dev opt-in for self-signed OpenSearch
+	}
+
 	return &http.Client{
-		Timeout: 30 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // local/dev only
-		},
+		Timeout:   30 * time.Second,
+		Transport: transport,
 	}
 }
 
 func LoadGateway() Config {
+	defaultPassword := getEnv("OPENSEARCH_ADMIN_PASSWORD", "")
+
 	return Config{
 		BaseURL:            getEnv("OPENSEARCH_URL", DefaultOpenSearchURL),
 		Username:           getEnv("OPENSEARCH_USERNAME", DefaultUsername),
-		Password:           getEnv("OPENSEARCH_PASSWORD", DefaultPassword),
+		Password:           getEnv("OPENSEARCH_PASSWORD", defaultPassword),
 		DashboardsURL:      getEnv("DASHBOARDS_URL", DefaultDashboardsURL),
 		DashboardsUsername: getEnv("DASHBOARDS_USERNAME", getEnv("OPENSEARCH_USERNAME", DefaultUsername)),
-		DashboardsPassword: getEnv("DASHBOARDS_PASSWORD", getEnv("OPENSEARCH_PASSWORD", DefaultPassword)),
+		DashboardsPassword: getEnv("DASHBOARDS_PASSWORD", getEnv("OPENSEARCH_PASSWORD", defaultPassword)),
 		DashboardsTenant:   getEnv("DASHBOARDS_TENANT", DefaultTenant),
 		ListenAddr:         getEnv("LISTEN_ADDR", DefaultListenAddr),
 		Shards:             2,

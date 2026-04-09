@@ -30,7 +30,9 @@ func (a *Authenticator) AuthenticateAccess(username, password string) (*authz.Us
 	if err != nil {
 		return nil, nil, err
 	}
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close()
+	}()
 
 	mail := username
 	if !strings.Contains(username, "@") && a.cfg.UserMailDomain != "" {

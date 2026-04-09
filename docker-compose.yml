@@ -63,6 +63,7 @@ services:
       OPENSEARCH_URL: https://opensearch:9200
       OPENSEARCH_USERNAME: admin
       OPENSEARCH_PASSWORD: ${OPENSEARCH_ADMIN_PASSWORD:-Cedar7!FluxOrbit29}
+      OPENSEARCH_SKIP_TLS_VERIFY: "true"
       DASHBOARDS_URL: http://opensearch-dashboards:5601
       DASHBOARDS_USERNAME: admin
       DASHBOARDS_PASSWORD: ${OPENSEARCH_ADMIN_PASSWORD:-Cedar7!FluxOrbit29}

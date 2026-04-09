@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"os"
 	"sync"
-	"time"
 
 	authzpkg "github.com/define42/opensearchgateway/internal/authz"
 	appconfig "github.com/define42/opensearchgateway/internal/config"
@@ -32,19 +31,13 @@ type errorResponse = serverpkg.ErrorResponse
 type loginPageData = serverpkg.LoginPageData
 type ResponseError = opensearchpkg.ResponseError
 type dashboardsFindResponse = opensearchpkg.DashboardsFindResponse
-type dashboardsSavedObjectResponse = opensearchpkg.DashboardsSavedObjectResponse
 type securityRoleRequest = opensearchpkg.SecurityRoleRequest
-type securityIndexPermission = opensearchpkg.SecurityIndexPermission
-type securityTenantPermission = opensearchpkg.SecurityTenantPermission
-type dashboardsSavedObjectRequest = opensearchpkg.DashboardsSavedObjectRequest
-type dashboardsSettingValueRequest = opensearchpkg.DashboardsSettingValueRequest
 type ismPolicyResponse = opensearchpkg.ISMPolicyResponse
 type ismPolicy = opensearchpkg.ISMPolicy
 type ingestAuthCache = ingestpkg.AuthCache
-type ingestAuthCacheStats = ingestpkg.AuthCacheStats
 
 const (
-	defaultPassword      = appconfig.DefaultPassword
+	defaultPassword      = "Cedar7!FluxOrbit29"
 	defaultTenant        = appconfig.DefaultTenant
 	sessionCookieName    = serverpkg.SessionCookieName
 	ismPolicyID          = opensearchpkg.DefaultISMPolicyID
@@ -59,7 +52,6 @@ const (
 
 var (
 	errLDAPInvalidCredentials = ldappkg.ErrInvalidCredentials
-	errLDAPUserNotFound       = ldappkg.ErrUserNotFound
 	errLDAPUnauthorized       = ldappkg.ErrUnauthorized
 	errReservedInternalUser   = opensearchpkg.ErrReservedInternalUser
 	ldapCfg                   = appconfig.LoadLDAP()
@@ -197,24 +189,8 @@ func morePermissive(a, b *User) bool {
 	return authzpkg.MorePermissive(a, b)
 }
 
-func parseIngestPath(path string) (string, error) {
-	return ingestpkg.ParsePath(path)
-}
-
 func decodeJSONObject(body io.Reader) (map[string]any, error) {
 	return ingestpkg.DecodeJSONObject(body)
-}
-
-func parseEventTime(document map[string]any) (time.Time, error) {
-	return ingestpkg.ParseEventTime(document)
-}
-
-func buildWriteAlias(indexName string, eventTime time.Time) string {
-	return ingestpkg.BuildWriteAlias(indexName, eventTime)
-}
-
-func buildFirstBackingIndex(alias string) string {
-	return ingestpkg.BuildFirstBackingIndex(alias)
 }
 
 func normalizeAccessByNamespace(access []Access) []Access {
@@ -235,10 +211,6 @@ func roleRequestForAccess(access Access) securityRoleRequest {
 
 func buildDataViewID(indexName string) string {
 	return opensearchpkg.BuildDataViewID(indexName)
-}
-
-func buildDataViewPattern(indexName string) string {
-	return opensearchpkg.BuildDataViewPattern(indexName)
 }
 
 func dashboardsAPIPath(path string) string {
