@@ -164,9 +164,9 @@ func TestGatewayIngestBasicAuthUsesLDAPCache(t *testing.T) {
 		calls = append(calls, r.Method+" "+r.URL.Path)
 
 		switch r.Method + " " + r.URL.Path {
-		case "HEAD /_alias/team10-20241230-rollover":
+		case "HEAD /_alias/team10-hello-20241230-rollover":
 			w.WriteHeader(http.StatusOK)
-		case "POST /team10-20241230-rollover/_doc":
+		case "POST /team10-hello-20241230-rollover/_doc":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"result":"created","_id":"cached-doc"}`)
 		default:
@@ -186,7 +186,7 @@ func TestGatewayIngestBasicAuthUsesLDAPCache(t *testing.T) {
 	handler := gateway.Handler()
 	for i := 0; i < 2; i++ {
 		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodPost, "/ingest/team10", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"cached"}`))
+		request := httptest.NewRequest(http.MethodPost, "/ingest/team10-hello", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"cached"}`))
 		request.Header.Set("Content-Type", "application/json")
 		request.SetBasicAuth("ingestuser", "dogood")
 
@@ -200,7 +200,7 @@ func TestGatewayIngestBasicAuthUsesLDAPCache(t *testing.T) {
 		if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 			t.Fatalf("decode response: %v", err)
 		}
-		if response.WriteAlias != "team10-20241230-rollover" {
+		if response.WriteAlias != "team10-hello-20241230-rollover" {
 			t.Fatalf("unexpected write alias: %#v", response)
 		}
 	}
@@ -235,7 +235,7 @@ func TestGatewayIngestBasicAuthDoesNotCacheAuthenticationErrors(t *testing.T) {
 	handler := gateway.Handler()
 	for i := 0; i < 2; i++ {
 		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodPost, "/ingest/team10", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"cached"}`))
+		request := httptest.NewRequest(http.MethodPost, "/ingest/team10-hello", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"cached"}`))
 		request.Header.Set("Content-Type", "application/json")
 		request.SetBasicAuth("ingestuser", "wrong")
 

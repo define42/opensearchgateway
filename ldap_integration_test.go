@@ -61,20 +61,20 @@ func TestLDAPIngestUserCanIngestTeam10(t *testing.T) {
 		case "PUT /_plugins/_security/api/tenants/team10":
 			w.WriteHeader(http.StatusCreated)
 			_, _ = io.WriteString(w, `{}`)
-		case "HEAD /_alias/team10-20241230-rollover":
+		case "HEAD /_alias/team10-hello-20241230-rollover":
 			if aliasChecks == 0 {
 				w.WriteHeader(http.StatusNotFound)
 			} else {
 				w.WriteHeader(http.StatusOK)
 			}
 			aliasChecks++
-		case "PUT /team10-20241230-rollover-000001":
+		case "PUT /team10-hello-20241230-rollover-000001":
 			w.WriteHeader(http.StatusCreated)
 			_, _ = io.WriteString(w, `{}`)
-		case "POST /_plugins/_ism/add/team10-20241230-rollover-000001":
+		case "POST /_plugins/_ism/add/team10-hello-20241230-rollover-000001":
 			w.WriteHeader(http.StatusCreated)
 			_, _ = io.WriteString(w, `{}`)
-		case "POST /team10-20241230-rollover/_doc":
+		case "POST /team10-hello-20241230-rollover/_doc":
 			indexedDocument = decodeRequestBody(t, r)
 			indexedDocuments++
 			w.Header().Set("Content-Type", "application/json")
@@ -96,7 +96,7 @@ func TestLDAPIngestUserCanIngestTeam10(t *testing.T) {
 		}
 
 		switch r.Method + " " + r.URL.RequestURI() {
-		case "POST /dashboards/api/saved_objects/index-pattern/gateway-index-pattern-team10?overwrite=true":
+		case "POST /dashboards/api/saved_objects/index-pattern/gateway-index-pattern-team10-hello?overwrite=true":
 			w.WriteHeader(http.StatusOK)
 			_, _ = io.WriteString(w, `{}`)
 		case "POST /dashboards/api/opensearch-dashboards/settings/defaultIndex":
@@ -128,7 +128,7 @@ func TestLDAPIngestUserCanIngestTeam10(t *testing.T) {
 	responses := make([]ingestResponse, 0, 2)
 	messages := []string{"ldap ingest integration", "ldap ingest cached"}
 	for _, message := range messages {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/ingest/team10", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"`+message+`"}`))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/ingest/team10-hello", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"`+message+`"}`))
 		if err != nil {
 			t.Fatalf("build ingest request: %v", err)
 		}
@@ -156,7 +156,7 @@ func TestLDAPIngestUserCanIngestTeam10(t *testing.T) {
 		responses = append(responses, response)
 	}
 
-	if responses[0].WriteAlias != "team10-20241230-rollover" || responses[1].WriteAlias != "team10-20241230-rollover" {
+	if responses[0].WriteAlias != "team10-hello-20241230-rollover" || responses[1].WriteAlias != "team10-hello-20241230-rollover" {
 		t.Fatalf("unexpected write aliases: %#v", responses)
 	}
 	if responses[0].DocumentID != "ldap-team10-doc" || responses[0].Result != "created" || !responses[0].Bootstrapped {
@@ -179,10 +179,10 @@ func TestLDAPIngestUserCanIngestTeam10(t *testing.T) {
 		t.Fatalf("expected two indexed documents, got %d", indexedDocuments)
 	}
 
-	if !containsCall(openSearchCalls, "POST /team10-20241230-rollover/_doc") {
+	if !containsCall(openSearchCalls, "POST /team10-hello-20241230-rollover/_doc") {
 		t.Fatalf("expected document ingest call, got %#v", openSearchCalls)
 	}
-	if !containsCall(dashboardsCalls, "POST /dashboards/api/saved_objects/index-pattern/gateway-index-pattern-team10?overwrite=true") {
+	if !containsCall(dashboardsCalls, "POST /dashboards/api/saved_objects/index-pattern/gateway-index-pattern-team10-hello?overwrite=true") {
 		t.Fatalf("expected Dashboards data view creation, got %#v", dashboardsCalls)
 	}
 	if len(dashboardsCalls) != 2 {
@@ -257,7 +257,7 @@ func TestLDAPJohndoeCannotIngestTeam10(t *testing.T) {
 	baseURL, _, stopGateway := startIntegrationGateway(ctx, t, cfg)
 	defer stopGateway()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/ingest/team10", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"should be forbidden"}`))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/ingest/team10-hello", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"should be forbidden"}`))
 	if err != nil {
 		t.Fatalf("build ingest request: %v", err)
 	}
@@ -294,7 +294,7 @@ func TestLDAPJohndoeCannotIngestTeam10(t *testing.T) {
 	if containsCall(openSearchCalls, "GET /_plugins/_security/api/tenants/team10") {
 		t.Fatalf("tenant creation should not happen for read-only LDAP user: %#v", openSearchCalls)
 	}
-	if containsCall(openSearchCalls, "POST /team10-20241230-rollover/_doc") {
+	if containsCall(openSearchCalls, "POST /team10-hello-20241230-rollover/_doc") {
 		t.Fatalf("document indexing should not happen for read-only LDAP user: %#v", openSearchCalls)
 	}
 }

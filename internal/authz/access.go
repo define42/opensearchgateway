@@ -1,7 +1,10 @@
 // Package authz defines shared namespace access semantics for the gateway.
 package authz
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
 
 // User describes the most permissive namespace access selected for a person.
 type User struct {
@@ -92,14 +95,34 @@ func CloneAccess(access []Access) []Access {
 	return cloned
 }
 
-// HasIngestWriteAccess reports whether access permits writes to indexName.
-func HasIngestWriteAccess(access []Access, indexName string) bool {
+// ResolveIngestWriteNamespace returns the namespace that permits writing indexName.
+func ResolveIngestWriteNamespace(access []Access, indexName string) (string, bool) {
+	bestNamespace := ""
 	for _, item := range NormalizeAccessByNamespace(access) {
-		if item.Namespace == indexName && !item.PullOnly {
-			return true
+		if item.PullOnly || item.Namespace == "" {
+			continue
+		}
+
+		prefix := item.Namespace + "-"
+		if !strings.HasPrefix(indexName, prefix) || len(indexName) == len(prefix) {
+			continue
+		}
+
+		if len(item.Namespace) > len(bestNamespace) {
+			bestNamespace = item.Namespace
 		}
 	}
-	return false
+
+	if bestNamespace == "" {
+		return "", false
+	}
+	return bestNamespace, true
+}
+
+// HasIngestWriteAccess reports whether access permits writes to indexName.
+func HasIngestWriteAccess(access []Access, indexName string) bool {
+	_, ok := ResolveIngestWriteNamespace(access, indexName)
+	return ok
 }
 
 // RoleModeForAccess converts access into the gateway's role suffix.

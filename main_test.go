@@ -262,11 +262,11 @@ func TestEnsureDashboardDataViewCreatesExpectedPattern(t *testing.T) {
 	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		openSearchCalls = append(openSearchCalls, r.Method+" "+r.URL.Path)
 
-		if r.Method != http.MethodGet || r.URL.Path != "/_plugins/_security/api/tenants/orders" {
+		if r.Method != http.MethodGet || r.URL.Path != "/_plugins/_security/api/tenants/team10" {
 			t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
 		}
 		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, `{"orders":{"reserved":false}}`)
+		_, _ = io.WriteString(w, `{"team10":{"reserved":false}}`)
 	}))
 	defer openSearch.Close()
 
@@ -276,11 +276,11 @@ func TestEnsureDashboardDataViewCreatesExpectedPattern(t *testing.T) {
 		if got := r.Header.Get("osd-xsrf"); got != "true" {
 			t.Fatalf("expected osd-xsrf header, got %q", got)
 		}
-		if got := r.Header.Get("securitytenant"); got != "orders" {
+		if got := r.Header.Get("securitytenant"); got != "team10" {
 			t.Fatalf("expected securitytenant header, got %q", got)
 		}
 		switch r.Method + " " + r.URL.RequestURI() {
-		case "POST /dashboards/api/saved_objects/index-pattern/gateway-index-pattern-orders?overwrite=true":
+		case "POST /dashboards/api/saved_objects/index-pattern/gateway-index-pattern-team10-hello?overwrite=true":
 			requestBody = decodeRequestBody(t, r)
 			w.WriteHeader(http.StatusOK)
 			_, _ = io.WriteString(w, `{}`)
@@ -296,25 +296,29 @@ func TestEnsureDashboardDataViewCreatesExpectedPattern(t *testing.T) {
 
 	client := newClient(testConfigWithDashboards(openSearch, dashboards))
 
-	if err := client.EnsureDashboardDataView(context.Background(), "orders"); err != nil {
+	if err := client.EnsureDashboardDataView(context.Background(), "team10", "team10-hello"); err != nil {
 		t.Fatalf("EnsureDashboardDataView returned error: %v", err)
 	}
 
 	if !reflect.DeepEqual(openSearchCalls, []string{
-		"GET /_plugins/_security/api/tenants/orders",
+		"GET /_plugins/_security/api/tenants/team10",
 	}) {
 		t.Fatalf("unexpected OpenSearch request sequence: %#v", openSearchCalls)
 	}
 
 	attributes := nestedMap(t, requestBody["attributes"])
-	if got := attributes["title"]; got != "orders-*" {
+	if got := attributes["title"]; got != "team10-hello-*" {
 		t.Fatalf("unexpected data view title: %#v", got)
 	}
 	if got := attributes["timeFieldName"]; got != "event_time" {
 		t.Fatalf("unexpected time field: %#v", got)
 	}
-	if got := defaultIndexBody["value"]; got != "gateway-index-pattern-orders" {
+	if got := defaultIndexBody["value"]; got != "gateway-index-pattern-team10-hello" {
 		t.Fatalf("unexpected default index body: %#v", defaultIndexBody)
+	}
+	ensured := client.EnsuredDashboardDataViews("team10")
+	if len(ensured) != 1 || ensured[0].Attributes.Title != "team10-hello-*" {
+		t.Fatalf("expected ensured data-view cache to contain team10-hello, got %#v", ensured)
 	}
 }
 
@@ -335,10 +339,10 @@ func TestGatewayIngestEnsuresDashboardDataView(t *testing.T) {
 			appendCall("tenant-get")
 			w.WriteHeader(http.StatusOK)
 			_, _ = io.WriteString(w, `{"orders":{"reserved":false}}`)
-		case "HEAD /_alias/orders-20241230-rollover":
+		case "HEAD /_alias/orders-demo-20241230-rollover":
 			appendCall("alias-head")
 			w.WriteHeader(http.StatusOK)
-		case "POST /orders-20241230-rollover/_doc":
+		case "POST /orders-demo-20241230-rollover/_doc":
 			appendCall("doc-post")
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"result":"created","_id":"dash-view"}`)
@@ -353,7 +357,7 @@ func TestGatewayIngestEnsuresDashboardDataView(t *testing.T) {
 			t.Fatalf("expected securitytenant header, got %q", got)
 		}
 		switch r.Method + " " + r.URL.RequestURI() {
-		case "POST /dashboards/api/saved_objects/index-pattern/gateway-index-pattern-orders?overwrite=true":
+		case "POST /dashboards/api/saved_objects/index-pattern/gateway-index-pattern-orders-demo?overwrite=true":
 			appendCall("data-view-post")
 			w.WriteHeader(http.StatusOK)
 			_, _ = io.WriteString(w, `{}`)
@@ -368,7 +372,7 @@ func TestGatewayIngestEnsuresDashboardDataView(t *testing.T) {
 	defer dashboards.Close()
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/ingest/orders", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
+	request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
 	request.Header.Set("Content-Type", "application/json")
 	addTestIngestBasicAuth(request)
 
@@ -523,8 +527,8 @@ func TestGatewayAuthenticatedLoginRedirectsToDashboards(t *testing.T) {
 	if recorder.Code != http.StatusSeeOther {
 		t.Fatalf("expected status 303, got %d", recorder.Code)
 	}
-	if got := recorder.Header().Get("Location"); got != "/dashboards/" {
-		t.Fatalf("expected redirect to /dashboards/, got %q", got)
+	if got := recorder.Header().Get("Location"); got != "/dashboards/app/home?security_tenant=team1" {
+		t.Fatalf("expected redirect to first namespace tenant, got %q", got)
 	}
 }
 
@@ -711,8 +715,8 @@ func TestGatewayLoginSuccessProvisionsUserAndSession(t *testing.T) {
 	if recorder.Code != http.StatusSeeOther {
 		t.Fatalf("expected status 303, got %d: %s", recorder.Code, recorder.Body.String())
 	}
-	if got := recorder.Header().Get("Location"); got != "/dashboards/" {
-		t.Fatalf("expected redirect to /dashboards/, got %q", got)
+	if got := recorder.Header().Get("Location"); got != "/dashboards/app/home?security_tenant=team1" {
+		t.Fatalf("expected redirect to first namespace tenant, got %q", got)
 	}
 	if !strings.Contains(recorder.Header().Get("Set-Cookie"), sessionCookieName+"=") {
 		t.Fatalf("expected session cookie, got %q", recorder.Header().Get("Set-Cookie"))
@@ -746,6 +750,9 @@ func TestGatewayLoginSuccessProvisionsUserAndSession(t *testing.T) {
 		t.Fatalf("expected index permissions, got %#v", roleBody)
 	}
 	indexPermission := nestedMap(t, indexPermissions[0])
+	if got := indexPermission["index_patterns"]; !reflect.DeepEqual(got, []any{"team1-*"}) {
+		t.Fatalf("unexpected index patterns: %#v", got)
+	}
 	if got := indexPermission["allowed_actions"]; !reflect.DeepEqual(got, []any{"crud"}) {
 		t.Fatalf("unexpected allowed actions: %#v", got)
 	}
@@ -761,6 +768,9 @@ func TestGatewayLoginSuccessProvisionsUserAndSession(t *testing.T) {
 		t.Fatalf("expected tenant permissions, got %#v", roleBody)
 	}
 	tenantPermission := nestedMap(t, tenantPermissions[0])
+	if got := tenantPermission["tenant_patterns"]; !reflect.DeepEqual(got, []any{"team1"}) {
+		t.Fatalf("unexpected tenant patterns: %#v", got)
+	}
 	if got := tenantPermission["allowed_actions"]; !reflect.DeepEqual(got, []any{"kibana_all_write"}) {
 		t.Fatalf("unexpected tenant actions: %#v", got)
 	}
@@ -779,6 +789,96 @@ func TestGatewayLoginSuccessProvisionsUserAndSession(t *testing.T) {
 	}
 	if got := userBody["opendistro_security_roles"]; !reflect.DeepEqual(got, []any{"kibana_user", "gateway_team1_rwd"}) {
 		t.Fatalf("unexpected OpenSearch roles: %#v", got)
+	}
+}
+
+func TestGatewayLoginMultiNamespaceRedirectsToFirstTenant(t *testing.T) {
+	t.Parallel()
+
+	var userBody map[string]any
+	var openSearchCalls []string
+	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		openSearchCalls = append(openSearchCalls, r.Method+" "+r.URL.Path)
+
+		switch r.Method + " " + r.URL.Path {
+		case "GET /_plugins/_security/api/internalusers/testuser":
+			http.NotFound(w, r)
+		case "PUT /_plugins/_security/api/roles/gateway_team1_rwd",
+			"PUT /_plugins/_security/api/roles/gateway_team10_r",
+			"PUT /_plugins/_security/api/roles/gateway_team2_rw":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = io.WriteString(w, `{}`)
+		case "GET /_plugins/_security/api/tenants/team1":
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"team1":{"reserved":false}}`)
+		case "GET /_plugins/_security/api/tenants/team10":
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"team10":{"reserved":false}}`)
+		case "GET /_plugins/_security/api/tenants/team2":
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"team2":{"reserved":false}}`)
+		case "PUT /_plugins/_security/api/internalusers/testuser":
+			userBody = decodeRequestBody(t, r)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = io.WriteString(w, `{}`)
+		default:
+			t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer openSearch.Close()
+
+	var dashboardsCalls []string
+	dashboards := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dashboardsCalls = append(dashboardsCalls, r.Method+" "+r.URL.RequestURI())
+
+		switch r.Method + " " + r.URL.RequestURI() {
+		case "POST /dashboards/api/saved_objects/index-pattern/gateway-index-pattern-team1?overwrite=true",
+			"POST /dashboards/api/saved_objects/index-pattern/gateway-index-pattern-team10?overwrite=true",
+			"POST /dashboards/api/saved_objects/index-pattern/gateway-index-pattern-team2?overwrite=true",
+			"POST /dashboards/api/opensearch-dashboards/settings/defaultIndex":
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{}`)
+		default:
+			t.Fatalf("unexpected Dashboards request: %s %s", r.Method, r.URL.RequestURI())
+		}
+	}))
+	defer dashboards.Close()
+
+	gateway := newGateway(newClient(testConfigWithDashboards(openSearch, dashboards)), func(username, password string) (*User, []Access, error) {
+		return &User{Name: username, Namespace: "team1", PullOnly: false, DeleteAllowed: true}, []Access{
+			{Group: "team10_r", Namespace: "team10", PullOnly: true},
+			{Group: "team1_rwd", Namespace: "team1", PullOnly: false, DeleteAllowed: true},
+			{Group: "team2_rw", Namespace: "team2", PullOnly: false},
+		}, nil
+	})
+
+	loginRecorder := httptest.NewRecorder()
+	loginRequest := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=testuser&password=dogood"))
+	loginRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	gateway.Handler().ServeHTTP(loginRecorder, loginRequest)
+
+	if loginRecorder.Code != http.StatusSeeOther {
+		t.Fatalf("expected login status 303, got %d: %s", loginRecorder.Code, loginRecorder.Body.String())
+	}
+	if got := loginRecorder.Header().Get("Location"); got != "/dashboards/app/home?security_tenant=team1" {
+		t.Fatalf("expected redirect to first namespace tenant, got %q", got)
+	}
+	cookies := loginRecorder.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatalf("expected login to set a session cookie")
+	}
+	if got := userBody["opendistro_security_roles"]; !reflect.DeepEqual(got, []any{"kibana_user", "gateway_team10_r", "gateway_team1_rwd", "gateway_team2_rw"}) {
+		t.Fatalf("unexpected OpenSearch roles: %#v", got)
+	}
+	attributes := nestedMap(t, userBody["attributes"])
+	if got := attributes["namespaces"]; got != "team1,team10,team2" {
+		t.Fatalf("unexpected namespace attribute: %#v", got)
+	}
+	if len(openSearchCalls) != 8 {
+		t.Fatalf("expected internal user plus three namespace provisioning calls and user upsert, got %#v", openSearchCalls)
+	}
+	if len(dashboardsCalls) != 6 {
+		t.Fatalf("expected three data views and three default-index calls, got %#v", dashboardsCalls)
 	}
 }
 
@@ -900,8 +1000,8 @@ func TestGatewayDashboardsProxyForwardsSessionBasicAuth(t *testing.T) {
 	if upstreamAuth != buildBasicAuthorization("testuser", "dogood") {
 		t.Fatalf("unexpected Authorization header: %q", upstreamAuth)
 	}
-	if upstreamTenant != "team1" {
-		t.Fatalf("expected single namespace tenant header, got %q", upstreamTenant)
+	if upstreamTenant != "" {
+		t.Fatalf("expected gateway not to inject tenant header, got %q", upstreamTenant)
 	}
 	if upstreamPath != "/dashboards/app/home" || upstreamQuery != "foo=bar" {
 		t.Fatalf("unexpected upstream request: path=%q query=%q", upstreamPath, upstreamQuery)
@@ -911,7 +1011,7 @@ func TestGatewayDashboardsProxyForwardsSessionBasicAuth(t *testing.T) {
 	}
 }
 
-func TestGatewayDashboardsProxyDoesNotAutoSelectTenantForMultiNamespaceSession(t *testing.T) {
+func TestGatewayDashboardsProxyDoesNotForceTenantForMultiNamespaceSession(t *testing.T) {
 	t.Parallel()
 
 	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -947,7 +1047,52 @@ func TestGatewayDashboardsProxyDoesNotAutoSelectTenantForMultiNamespaceSession(t
 		t.Fatalf("expected status 200, got %d: %s", recorder.Code, recorder.Body.String())
 	}
 	if upstreamTenant != "" {
-		t.Fatalf("expected no auto-selected tenant for multi-namespace session, got %q", upstreamTenant)
+		t.Fatalf("expected gateway not to force a tenant header, got %q", upstreamTenant)
+	}
+}
+
+func TestGatewayDashboardsProxyForwardsTenantSelectionQuery(t *testing.T) {
+	t.Parallel()
+
+	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer openSearch.Close()
+
+	var upstreamQueries []string
+	var upstreamTenants []string
+	dashboards := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamQueries = append(upstreamQueries, r.URL.RawQuery)
+		upstreamTenants = append(upstreamTenants, r.Header.Get("securitytenant"))
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = io.WriteString(w, "proxied dashboards")
+	}))
+	defer dashboards.Close()
+
+	gateway := newGateway(newClient(testConfigWithDashboards(openSearch, dashboards)), nil)
+	token, expiresAt, err := gateway.sessions.Create(sessionData{
+		User:       &User{Name: "testuser"},
+		AuthHeader: buildBasicAuthorization("testuser", "dogood"),
+		Namespaces: []string{"team1", "team10", "team2"},
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	cookie := &http.Cookie{Name: sessionCookieName, Value: mustEncodeSessionCookieValue(t, gateway, token), Expires: expiresAt}
+
+	firstRecorder := httptest.NewRecorder()
+	firstRequest := httptest.NewRequest(http.MethodGet, "/dashboards/app/home?security_tenant=team10", nil)
+	firstRequest.AddCookie(cookie)
+	gateway.Handler().ServeHTTP(firstRecorder, firstRequest)
+	if firstRecorder.Code != http.StatusOK {
+		t.Fatalf("expected first status 200, got %d: %s", firstRecorder.Code, firstRecorder.Body.String())
+	}
+
+	if !reflect.DeepEqual(upstreamQueries, []string{"security_tenant=team10"}) {
+		t.Fatalf("expected tenant selection query to pass through, got %#v", upstreamQueries)
+	}
+	if !reflect.DeepEqual(upstreamTenants, []string{""}) {
+		t.Fatalf("expected gateway not to inject tenant header, got %#v", upstreamTenants)
 	}
 }
 
@@ -983,6 +1128,7 @@ func TestGatewayDashboardsProxySynthesizesTenantIndexPatternFindResults(t *testi
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/dashboards/api/saved_objects/_find?fields=title&per_page=10000&type=index-pattern", nil)
+	request.Header.Set("securitytenant", "team1")
 	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: mustEncodeSessionCookieValue(t, gateway, token), Expires: expiresAt})
 
 	gateway.Handler().ServeHTTP(recorder, request)
@@ -1003,6 +1149,63 @@ func TestGatewayDashboardsProxySynthesizesTenantIndexPatternFindResults(t *testi
 	}
 	if got := payload.SavedObjects[0].Attributes.Title; got != "team1-*" {
 		t.Fatalf("unexpected data view title: %q", got)
+	}
+}
+
+func TestGatewayDashboardsProxyAddsEnsuredIndexPatternFindResults(t *testing.T) {
+	t.Parallel()
+
+	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer openSearch.Close()
+
+	dashboards := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("securitytenant"); got != "team1" {
+			t.Fatalf("expected securitytenant header, got %q", got)
+		}
+		if r.Method != http.MethodGet || r.URL.Path != "/dashboards/api/saved_objects/_find" {
+			t.Fatalf("unexpected Dashboards request: %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"page":1,"per_page":10000,"total":1,"saved_objects":[{"id":"gateway-index-pattern-team1","type":"index-pattern","attributes":{"title":"team1-*","timeFieldName":"event_time"}}]}`)
+	}))
+	defer dashboards.Close()
+
+	gateway := newGateway(newClient(testConfigWithDashboards(openSearch, dashboards)), nil)
+	gateway.Client.MarkDataViewEnsured("team1/" + buildDataViewID("team1-demo"))
+	token, expiresAt, err := gateway.sessions.Create(sessionData{
+		User:       &User{Name: "testuser"},
+		AuthHeader: buildBasicAuthorization("testuser", "dogood"),
+		Namespaces: []string{"team1"},
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/dashboards/api/saved_objects/_find?fields=title&per_page=10000&type=index-pattern", nil)
+	request.Header.Set("securitytenant", "team1")
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: mustEncodeSessionCookieValue(t, gateway, token), Expires: expiresAt})
+
+	gateway.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	var payload dashboardsFindResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode proxy response: %v", err)
+	}
+	if payload.Total != 2 || len(payload.SavedObjects) != 2 {
+		t.Fatalf("expected upstream and ensured saved objects, got %#v", payload)
+	}
+	if got := payload.SavedObjects[1].ID; got != buildDataViewID("team1-demo") {
+		t.Fatalf("unexpected ensured data view id: %q", got)
+	}
+	if got := payload.SavedObjects[1].Attributes.Title; got != "team1-demo-*" {
+		t.Fatalf("unexpected ensured data view title: %q", got)
 	}
 }
 
@@ -1127,7 +1330,7 @@ func TestGatewayIngestRequiresAuthentication(t *testing.T) {
 	defer openSearch.Close()
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/ingest/orders", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
+	request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
 	request.Header.Set("Content-Type", "application/json")
 
 	testGatewayHandler(testConfig(openSearch)).ServeHTTP(recorder, request)
@@ -1149,7 +1352,7 @@ func TestGatewayIngestRejectsInvalidCredentials(t *testing.T) {
 	defer openSearch.Close()
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/ingest/orders", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
+	request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
 	request.Header.Set("Content-Type", "application/json")
 	request.SetBasicAuth("writer", "wrong")
 
@@ -1171,7 +1374,7 @@ func TestGatewayIngestRejectsReadOnlyAccess(t *testing.T) {
 	defer openSearch.Close()
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/ingest/team10", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
+	request := httptest.NewRequest(http.MethodPost, "/ingest/team10-hello", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
 	request.Header.Set("Content-Type", "application/json")
 	request.SetBasicAuth("johndoe", "dogood")
 
@@ -1195,13 +1398,37 @@ func TestGatewayIngestRejectsWrongNamespace(t *testing.T) {
 	defer openSearch.Close()
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/ingest/orders", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
+	request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
 	request.Header.Set("Content-Type", "application/json")
 	request.SetBasicAuth("writer", "secret")
 
 	testGatewayHandlerWithAuth(testConfig(openSearch), func(username, password string) (*User, []Access, error) {
 		return &User{Name: username, Namespace: "team1"}, []Access{
 			{Group: "team1_rw", Namespace: "team1"},
+		}, nil
+	}).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected status 403, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestGatewayIngestRejectsBareNamespace(t *testing.T) {
+	t.Parallel()
+
+	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer openSearch.Close()
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/ingest/team10", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.SetBasicAuth("writer", "secret")
+
+	testGatewayHandlerWithAuth(testConfig(openSearch), func(username, password string) (*User, []Access, error) {
+		return &User{Name: username, Namespace: "team10"}, []Access{
+			{Group: "team10_rw", Namespace: "team10"},
 		}, nil
 	}).ServeHTTP(recorder, request)
 
@@ -1218,9 +1445,9 @@ func TestGatewayIngestUsesAuthenticatedSessionAccess(t *testing.T) {
 		calls = append(calls, r.Method+" "+r.URL.Path)
 
 		switch r.Method + " " + r.URL.Path {
-		case "HEAD /_alias/team10-20241230-rollover":
+		case "HEAD /_alias/team10-hello-20241230-rollover":
 			w.WriteHeader(http.StatusOK)
-		case "POST /team10-20241230-rollover/_doc":
+		case "POST /team10-hello-20241230-rollover/_doc":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"result":"created","_id":"session-doc"}`)
 		default:
@@ -1244,7 +1471,7 @@ func TestGatewayIngestUsesAuthenticatedSessionAccess(t *testing.T) {
 	}
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/ingest/team10", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
+	request := httptest.NewRequest(http.MethodPost, "/ingest/team10-hello", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
 	request.Header.Set("Content-Type", "application/json")
 	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: mustEncodeSessionCookieValue(t, gateway, token), Expires: expiresAt})
 
@@ -1254,8 +1481,8 @@ func TestGatewayIngestUsesAuthenticatedSessionAccess(t *testing.T) {
 		t.Fatalf("expected status 201, got %d: %s", recorder.Code, recorder.Body.String())
 	}
 	if !reflect.DeepEqual(calls, []string{
-		"HEAD /_alias/team10-20241230-rollover",
-		"POST /team10-20241230-rollover/_doc",
+		"HEAD /_alias/team10-hello-20241230-rollover",
+		"POST /team10-hello-20241230-rollover/_doc",
 	}) {
 		t.Fatalf("unexpected OpenSearch sequence: %#v", calls)
 	}
@@ -1271,20 +1498,20 @@ func TestGatewayIngestBootstrapsAndIndexes(t *testing.T) {
 
 	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
-		case "HEAD /_alias/orders-20241230-rollover":
+		case "HEAD /_alias/orders-demo-20241230-rollover":
 			calls = append(calls, "head")
 			w.WriteHeader(http.StatusNotFound)
-		case "PUT /orders-20241230-rollover-000001":
+		case "PUT /orders-demo-20241230-rollover-000001":
 			calls = append(calls, "create")
 			createBody = decodeRequestBody(t, r)
 			w.WriteHeader(http.StatusCreated)
 			_, _ = io.WriteString(w, `{}`)
-		case "POST /_plugins/_ism/add/orders-20241230-rollover-000001":
+		case "POST /_plugins/_ism/add/orders-demo-20241230-rollover-000001":
 			calls = append(calls, "attach")
 			attachBody = decodeRequestBody(t, r)
 			w.WriteHeader(http.StatusCreated)
 			_, _ = io.WriteString(w, `{}`)
-		case "POST /orders-20241230-rollover/_doc":
+		case "POST /orders-demo-20241230-rollover/_doc":
 			calls = append(calls, "index")
 			indexBody = decodeRequestBody(t, r)
 			w.Header().Set("Content-Type", "application/json")
@@ -1296,7 +1523,7 @@ func TestGatewayIngestBootstrapsAndIndexes(t *testing.T) {
 	defer openSearch.Close()
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/ingest/orders/", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello","count":1}`))
+	request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo/", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello","count":1}`))
 	request.Header.Set("Content-Type", "application/json")
 	addTestIngestBasicAuth(request)
 
@@ -1310,13 +1537,13 @@ func TestGatewayIngestBootstrapsAndIndexes(t *testing.T) {
 	}
 
 	aliases := nestedMap(t, createBody["aliases"])
-	aliasConfig := nestedMap(t, aliases["orders-20241230-rollover"])
+	aliasConfig := nestedMap(t, aliases["orders-demo-20241230-rollover"])
 	if got := aliasConfig["is_write_index"]; got != true {
 		t.Fatalf("expected write alias to be marked as write index, got %#v", got)
 	}
 
 	settings := nestedMap(t, createBody["settings"])
-	if got := settings["plugins.index_state_management.rollover_alias"]; got != "orders-20241230-rollover" {
+	if got := settings["plugins.index_state_management.rollover_alias"]; got != "orders-demo-20241230-rollover" {
 		t.Fatalf("unexpected rollover alias setting: %#v", got)
 	}
 
@@ -1334,7 +1561,7 @@ func TestGatewayIngestBootstrapsAndIndexes(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if response.Result != "created" || response.DocumentID != "abc123" || response.WriteAlias != "orders-20241230-rollover" || !response.Bootstrapped {
+	if response.Result != "created" || response.DocumentID != "abc123" || response.WriteAlias != "orders-demo-20241230-rollover" || !response.Bootstrapped {
 		t.Fatalf("unexpected gateway response: %#v", response)
 	}
 }
@@ -1346,10 +1573,10 @@ func TestGatewayRepeatWriteSkipsBootstrap(t *testing.T) {
 
 	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
-		case "HEAD /_alias/orders-20241230-rollover":
+		case "HEAD /_alias/orders-demo-20241230-rollover":
 			calls = append(calls, "head")
 			w.WriteHeader(http.StatusOK)
-		case "POST /orders-20241230-rollover/_doc":
+		case "POST /orders-demo-20241230-rollover/_doc":
 			calls = append(calls, "index")
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"result":"created","_id":"steady"}`)
@@ -1360,7 +1587,7 @@ func TestGatewayRepeatWriteSkipsBootstrap(t *testing.T) {
 	defer openSearch.Close()
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/ingest/orders", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
+	request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
 	request.Header.Set("Content-Type", "application/json")
 	addTestIngestBasicAuth(request)
 
@@ -1380,7 +1607,7 @@ func TestGatewayRepeatWriteSkipsBootstrap(t *testing.T) {
 	if response.Bootstrapped {
 		t.Fatalf("expected repeat write to skip bootstrap, got %#v", response)
 	}
-	if response.WriteAlias != "orders-20241230-rollover" {
+	if response.WriteAlias != "orders-demo-20241230-rollover" {
 		t.Fatalf("unexpected alias: %#v", response)
 	}
 }
@@ -1393,7 +1620,8 @@ func TestGatewayValidationErrors(t *testing.T) {
 	}))
 	defer openSearch.Close()
 
-	longIndexName := strings.Repeat("a", 240)
+	longNamespace := strings.Repeat("a", 240)
+	longIndexName := longNamespace + "-x"
 	tests := []struct {
 		name        string
 		method      string
@@ -1402,22 +1630,22 @@ func TestGatewayValidationErrors(t *testing.T) {
 		body        string
 		wantStatus  int
 	}{
-		{name: "invalid json", method: http.MethodPost, path: "/ingest/orders", contentType: "application/json", body: `{"event_time":`, wantStatus: http.StatusBadRequest},
-		{name: "non object body", method: http.MethodPost, path: "/ingest/orders", contentType: "application/json", body: `[]`, wantStatus: http.StatusBadRequest},
-		{name: "missing event_time", method: http.MethodPost, path: "/ingest/orders", contentType: "application/json", body: `{"message":"hello"}`, wantStatus: http.StatusBadRequest},
-		{name: "non string event_time", method: http.MethodPost, path: "/ingest/orders", contentType: "application/json", body: `{"event_time":123}`, wantStatus: http.StatusBadRequest},
-		{name: "non utc event_time", method: http.MethodPost, path: "/ingest/orders", contentType: "application/json", body: `{"event_time":"2024-12-30T10:11:12+02:00"}`, wantStatus: http.StatusBadRequest},
+		{name: "invalid json", method: http.MethodPost, path: "/ingest/orders-demo", contentType: "application/json", body: `{"event_time":`, wantStatus: http.StatusBadRequest},
+		{name: "non object body", method: http.MethodPost, path: "/ingest/orders-demo", contentType: "application/json", body: `[]`, wantStatus: http.StatusBadRequest},
+		{name: "missing event_time", method: http.MethodPost, path: "/ingest/orders-demo", contentType: "application/json", body: `{"message":"hello"}`, wantStatus: http.StatusBadRequest},
+		{name: "non string event_time", method: http.MethodPost, path: "/ingest/orders-demo", contentType: "application/json", body: `{"event_time":123}`, wantStatus: http.StatusBadRequest},
+		{name: "non utc event_time", method: http.MethodPost, path: "/ingest/orders-demo", contentType: "application/json", body: `{"event_time":"2024-12-30T10:11:12+02:00"}`, wantStatus: http.StatusBadRequest},
 		{name: "invalid index", method: http.MethodPost, path: "/ingest/Orders", contentType: "application/json", body: `{"event_time":"2024-12-30T10:11:12Z"}`, wantStatus: http.StatusBadRequest},
 		{name: "extra path segments", method: http.MethodPost, path: "/ingest/orders/extra", contentType: "application/json", body: `{"event_time":"2024-12-30T10:11:12Z"}`, wantStatus: http.StatusBadRequest},
-		{name: "wrong content type", method: http.MethodPost, path: "/ingest/orders", contentType: "text/plain", body: `{"event_time":"2024-12-30T10:11:12Z"}`, wantStatus: http.StatusUnsupportedMediaType},
-		{name: "wrong method", method: http.MethodGet, path: "/ingest/orders", contentType: "application/json", body: ``, wantStatus: http.StatusMethodNotAllowed},
+		{name: "wrong content type", method: http.MethodPost, path: "/ingest/orders-demo", contentType: "text/plain", body: `{"event_time":"2024-12-30T10:11:12Z"}`, wantStatus: http.StatusUnsupportedMediaType},
+		{name: "wrong method", method: http.MethodGet, path: "/ingest/orders-demo", contentType: "application/json", body: ``, wantStatus: http.StatusMethodNotAllowed},
 		{name: "name too long", method: http.MethodPost, path: "/ingest/" + longIndexName, contentType: "application/json", body: `{"event_time":"2024-12-30T10:11:12Z"}`, wantStatus: http.StatusBadRequest},
 	}
 
 	gateway := testGatewayHandlerWithAuth(testConfig(openSearch), func(username, password string) (*User, []Access, error) {
 		return &User{Name: username, Namespace: "orders"}, []Access{
 			{Group: "orders_rw", Namespace: "orders"},
-			{Group: longIndexName + "_rw", Namespace: longIndexName},
+			{Group: longNamespace + "_rw", Namespace: longNamespace},
 		}, nil
 	})
 	for _, tt := range tests {
@@ -1452,33 +1680,33 @@ func TestGatewayOpenSearchFailuresReturnBadGateway(t *testing.T) {
 		{
 			name: "alias head failure",
 			handler: func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodHead || r.URL.Path != "/_alias/orders-20241230-rollover" {
+				if r.Method != http.MethodHead || r.URL.Path != "/_alias/orders-demo-20241230-rollover" {
 					t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
 				}
 				http.Error(w, "boom", http.StatusInternalServerError)
 			},
-			wantCalls: []string{"HEAD /_alias/orders-20241230-rollover"},
+			wantCalls: []string{"HEAD /_alias/orders-demo-20241230-rollover"},
 		},
 		{
 			name: "bootstrap put failure",
 			handler: sequenceHandler(t,
-				responseSpec{method: http.MethodHead, path: "/_alias/orders-20241230-rollover", status: http.StatusNotFound},
-				responseSpec{method: http.MethodPut, path: "/orders-20241230-rollover-000001", status: http.StatusInternalServerError, body: `{"error":"create failed"}`},
+				responseSpec{method: http.MethodHead, path: "/_alias/orders-demo-20241230-rollover", status: http.StatusNotFound},
+				responseSpec{method: http.MethodPut, path: "/orders-demo-20241230-rollover-000001", status: http.StatusInternalServerError, body: `{"error":"create failed"}`},
 			),
 			wantCalls: []string{
-				"HEAD /_alias/orders-20241230-rollover",
-				"PUT /orders-20241230-rollover-000001",
+				"HEAD /_alias/orders-demo-20241230-rollover",
+				"PUT /orders-demo-20241230-rollover-000001",
 			},
 		},
 		{
 			name: "document post failure",
 			handler: sequenceHandler(t,
-				responseSpec{method: http.MethodHead, path: "/_alias/orders-20241230-rollover", status: http.StatusOK},
-				responseSpec{method: http.MethodPost, path: "/orders-20241230-rollover/_doc", status: http.StatusInternalServerError, body: `{"error":"index failed"}`},
+				responseSpec{method: http.MethodHead, path: "/_alias/orders-demo-20241230-rollover", status: http.StatusOK},
+				responseSpec{method: http.MethodPost, path: "/orders-demo-20241230-rollover/_doc", status: http.StatusInternalServerError, body: `{"error":"index failed"}`},
 			),
 			wantCalls: []string{
-				"HEAD /_alias/orders-20241230-rollover",
-				"POST /orders-20241230-rollover/_doc",
+				"HEAD /_alias/orders-demo-20241230-rollover",
+				"POST /orders-demo-20241230-rollover/_doc",
 			},
 		},
 	}
@@ -1493,7 +1721,7 @@ func TestGatewayOpenSearchFailuresReturnBadGateway(t *testing.T) {
 			defer openSearch.Close()
 
 			recorder := httptest.NewRecorder()
-			request := httptest.NewRequest(http.MethodPost, "/ingest/orders", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
+			request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
 			request.Header.Set("Content-Type", "application/json")
 			addTestIngestBasicAuth(request)
 
@@ -1529,7 +1757,7 @@ func TestGatewayTenantFailureReturnsBadGateway(t *testing.T) {
 	defer dashboards.Close()
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/ingest/orders", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
+	request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
 	request.Header.Set("Content-Type", "application/json")
 	addTestIngestBasicAuth(request)
 
@@ -1564,7 +1792,7 @@ func TestGatewayDataViewFailureReturnsBadGateway(t *testing.T) {
 	dashboards := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		dashboardsCalls = append(dashboardsCalls, r.Method+" "+r.URL.RequestURI())
 
-		if r.Method != http.MethodPost || r.URL.RequestURI() != "/dashboards/api/saved_objects/index-pattern/gateway-index-pattern-orders?overwrite=true" {
+		if r.Method != http.MethodPost || r.URL.RequestURI() != "/dashboards/api/saved_objects/index-pattern/gateway-index-pattern-orders-demo?overwrite=true" {
 			t.Fatalf("unexpected Dashboards request: %s %s", r.Method, r.URL.RequestURI())
 		}
 		http.Error(w, `{"error":"data view create failed"}`, http.StatusInternalServerError)
@@ -1572,7 +1800,7 @@ func TestGatewayDataViewFailureReturnsBadGateway(t *testing.T) {
 	defer dashboards.Close()
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/ingest/orders", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
+	request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
 	request.Header.Set("Content-Type", "application/json")
 	addTestIngestBasicAuth(request)
 
@@ -1587,7 +1815,7 @@ func TestGatewayDataViewFailureReturnsBadGateway(t *testing.T) {
 		t.Fatalf("unexpected OpenSearch sequence: %#v", openSearchCalls)
 	}
 	if !reflect.DeepEqual(dashboardsCalls, []string{
-		"POST /dashboards/api/saved_objects/index-pattern/gateway-index-pattern-orders?overwrite=true",
+		"POST /dashboards/api/saved_objects/index-pattern/gateway-index-pattern-orders-demo?overwrite=true",
 	}) {
 		t.Fatalf("unexpected Dashboards sequence: %#v", dashboardsCalls)
 	}
@@ -1603,22 +1831,22 @@ func TestGatewayBootstrapConflictRetriesAliasCheck(t *testing.T) {
 
 		switch len(calls) {
 		case 1:
-			if r.Method != http.MethodHead || r.URL.Path != "/_alias/orders-20241230-rollover" {
+			if r.Method != http.MethodHead || r.URL.Path != "/_alias/orders-demo-20241230-rollover" {
 				t.Fatalf("unexpected first request: %s %s", r.Method, r.URL.Path)
 			}
 			w.WriteHeader(http.StatusNotFound)
 		case 2:
-			if r.Method != http.MethodPut || r.URL.Path != "/orders-20241230-rollover-000001" {
+			if r.Method != http.MethodPut || r.URL.Path != "/orders-demo-20241230-rollover-000001" {
 				t.Fatalf("unexpected second request: %s %s", r.Method, r.URL.Path)
 			}
 			http.Error(w, `{"error":{"type":"resource_already_exists_exception"}}`, http.StatusConflict)
 		case 3:
-			if r.Method != http.MethodHead || r.URL.Path != "/_alias/orders-20241230-rollover" {
+			if r.Method != http.MethodHead || r.URL.Path != "/_alias/orders-demo-20241230-rollover" {
 				t.Fatalf("unexpected third request: %s %s", r.Method, r.URL.Path)
 			}
 			w.WriteHeader(http.StatusOK)
 		case 4:
-			if r.Method != http.MethodPost || r.URL.Path != "/orders-20241230-rollover/_doc" {
+			if r.Method != http.MethodPost || r.URL.Path != "/orders-demo-20241230-rollover/_doc" {
 				t.Fatalf("unexpected fourth request: %s %s", r.Method, r.URL.Path)
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -1630,7 +1858,7 @@ func TestGatewayBootstrapConflictRetriesAliasCheck(t *testing.T) {
 	defer openSearch.Close()
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/ingest/orders", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
+	request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
 	request.Header.Set("Content-Type", "application/json")
 	addTestIngestBasicAuth(request)
 
@@ -1640,10 +1868,10 @@ func TestGatewayBootstrapConflictRetriesAliasCheck(t *testing.T) {
 		t.Fatalf("expected status 201, got %d: %s", recorder.Code, recorder.Body.String())
 	}
 	if !reflect.DeepEqual(calls, []string{
-		"HEAD /_alias/orders-20241230-rollover",
-		"PUT /orders-20241230-rollover-000001",
-		"HEAD /_alias/orders-20241230-rollover",
-		"POST /orders-20241230-rollover/_doc",
+		"HEAD /_alias/orders-demo-20241230-rollover",
+		"PUT /orders-demo-20241230-rollover-000001",
+		"HEAD /_alias/orders-demo-20241230-rollover",
+		"POST /orders-demo-20241230-rollover/_doc",
 	}) {
 		t.Fatalf("unexpected OpenSearch sequence: %#v", calls)
 	}

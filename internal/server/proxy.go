@@ -20,7 +20,6 @@ func (g *Gateway) proxyDashboards(w http.ResponseWriter, r *http.Request, sessio
 		return fmt.Errorf("invalid Dashboards URL: %w", err)
 	}
 
-	defaultTenant := sessionDefaultTenant(sessionData)
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(target)
@@ -28,9 +27,6 @@ func (g *Gateway) proxyDashboards(w http.ResponseWriter, r *http.Request, sessio
 			pr.SetXForwarded()
 			pr.Out.Header.Del("Authorization")
 			pr.Out.Header.Set("Authorization", sessionData.AuthHeader)
-			if pr.Out.Header.Get("securitytenant") == "" && defaultTenant != "" {
-				pr.Out.Header.Set("securitytenant", defaultTenant)
-			}
 			pr.Out.Header.Set("X-Forwarded-Host", pr.In.Host)
 			pr.Out.Header.Set("X-Forwarded-Proto", ForwardedProto(pr.In))
 		},
@@ -74,12 +70,13 @@ func (g *Gateway) ModifyDashboardsResponse(resp *http.Response, sessionData sess
 		restoreDashboardsBody(resp, body)
 		return nil
 	}
-	if !shouldPatchIndexPatternResponse(payload, resp.Request, tenantName) {
+	replacementPayload, changed := g.enrichIndexPatternFindResponse(payload, resp.Request, tenantName)
+	if !changed {
 		restoreDashboardsBody(resp, body)
 		return nil
 	}
 
-	replacement, err := json.Marshal(syntheticIndexPatternFindResponse(payload, tenantName))
+	replacement, err := json.Marshal(replacementPayload)
 	if err != nil {
 		return err
 	}
@@ -89,18 +86,22 @@ func (g *Gateway) ModifyDashboardsResponse(resp *http.Response, sessionData sess
 }
 
 func dashboardsTenantName(req *http.Request, sessionData session.Data) (string, bool) {
-	tenantName := strings.TrimSpace(req.Header.Get("securitytenant"))
-	if tenantName == "" {
-		tenantName = sessionDefaultTenant(sessionData)
-	}
-	if tenantName == "" || !SessionHasNamespace(sessionData, tenantName) {
+	if req == nil || req.URL == nil {
 		return "", false
 	}
-	return tenantName, true
-}
 
-func shouldPatchIndexPatternResponse(payload opensearch.DashboardsFindResponse, req *http.Request, tenantName string) bool {
-	return payload.Total == 0 && MatchesIndexPatternFindQuery(req.URL.Query(), tenantName)
+	candidates := []string{
+		req.Header.Get("securitytenant"),
+		req.URL.Query().Get("security_tenant"),
+		req.URL.Query().Get("securitytenant"),
+	}
+	for _, candidate := range candidates {
+		tenantName := strings.TrimSpace(candidate)
+		if tenantName != "" && SessionHasNamespace(sessionData, tenantName) {
+			return tenantName, true
+		}
+	}
+	return "", false
 }
 
 func restoreDashboardsBody(resp *http.Response, payload []byte) {
@@ -109,27 +110,49 @@ func restoreDashboardsBody(resp *http.Response, payload []byte) {
 	resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(payload)))
 }
 
-func syntheticIndexPatternFindResponse(payload opensearch.DashboardsFindResponse, tenantName string) opensearch.DashboardsFindResponse {
-	response := opensearch.DashboardsFindResponse{
-		Page:    payload.Page,
-		PerPage: payload.PerPage,
-		Total:   1,
-		SavedObjects: []opensearch.DashboardsSavedObjectResponse{
-			{
-				ID:   opensearch.BuildDataViewID(tenantName),
-				Type: "index-pattern",
-				Attributes: opensearch.DashboardsDataViewAttributes{
-					Title:         opensearch.BuildDataViewPattern(tenantName),
-					TimeFieldName: "event_time",
-				},
-				References: []any{},
-			},
-		},
+func (g *Gateway) enrichIndexPatternFindResponse(payload opensearch.DashboardsFindResponse, req *http.Request, tenantName string) (opensearch.DashboardsFindResponse, bool) {
+	query := req.URL.Query()
+	candidates := make([]opensearch.DashboardsSavedObjectResponse, 0)
+	if payload.Total == 0 && MatchesIndexPatternFindQuery(query, tenantName) {
+		candidates = append(candidates, opensearch.BuildDataViewSavedObject(tenantName))
 	}
-	if payload.Page > 1 || payload.PerPage == 0 {
-		response.SavedObjects = []opensearch.DashboardsSavedObjectResponse{}
+	for _, object := range g.Client.EnsuredDashboardDataViews(tenantName) {
+		if MatchesDataViewFindQuery(query, object) {
+			candidates = append(candidates, object)
+		}
 	}
-	return response
+	if len(candidates) == 0 {
+		return payload, false
+	}
+
+	seen := make(map[string]struct{}, len(payload.SavedObjects)+len(candidates))
+	for _, object := range payload.SavedObjects {
+		seen[object.ID] = struct{}{}
+	}
+
+	missing := make([]opensearch.DashboardsSavedObjectResponse, 0, len(candidates))
+	for _, object := range candidates {
+		if _, ok := seen[object.ID]; ok {
+			continue
+		}
+		seen[object.ID] = struct{}{}
+		missing = append(missing, object)
+	}
+	if len(missing) == 0 {
+		return payload, false
+	}
+
+	payload.Total += len(missing)
+	if payload.Page <= 1 && payload.PerPage > 0 {
+		available := payload.PerPage - len(payload.SavedObjects)
+		if available > len(missing) {
+			available = len(missing)
+		}
+		if available > 0 {
+			payload.SavedObjects = append(payload.SavedObjects, missing[:available]...)
+		}
+	}
+	return payload, true
 }
 
 // IsDashboardsIndexPatternFindRequest reports whether req is a data-view search.
@@ -159,4 +182,14 @@ func MatchesIndexPatternFindQuery(values url.Values, tenantName string) bool {
 	title := opensearch.BuildDataViewPattern(tenantName)
 	id := opensearch.BuildDataViewID(tenantName)
 	return strings.Contains(title, search) || strings.Contains(id, search) || strings.Contains(tenantName, search)
+}
+
+// MatchesDataViewFindQuery reports whether values target object.
+func MatchesDataViewFindQuery(values url.Values, object opensearch.DashboardsSavedObjectResponse) bool {
+	search := strings.TrimSpace(strings.Trim(values.Get("search"), "*"))
+	if search == "" {
+		return true
+	}
+
+	return strings.Contains(object.Attributes.Title, search) || strings.Contains(object.ID, search)
 }

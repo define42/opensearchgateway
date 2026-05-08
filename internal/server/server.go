@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"mime"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -138,7 +139,7 @@ func (g *Gateway) handleLogin(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		if _, sessionData, ok := g.currentSession(r); ok && sessionData.ExpiresAt.After(time.Now()) {
-			http.Redirect(w, r, "/dashboards/", http.StatusSeeOther)
+			http.Redirect(w, r, dashboardsLandingPath(sessionData.Namespaces), http.StatusSeeOther)
 			return
 		}
 		g.RenderLoginPage(w, http.StatusOK, LoginPageData{})
@@ -272,7 +273,7 @@ func (g *Gateway) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	g.setSessionCookie(w, r, token, expiresAt)
-	http.Redirect(w, r, "/dashboards/", http.StatusSeeOther)
+	http.Redirect(w, r, dashboardsLandingPath(namespaces), http.StatusSeeOther)
 }
 
 func (g *Gateway) handleIngest(w http.ResponseWriter, r *http.Request) {
@@ -288,7 +289,8 @@ func (g *Gateway) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := g.authorizeIngestRequest(r, indexName); err != nil {
+	tenantName, err := g.authorizeIngestRequest(r, indexName)
+	if err != nil {
 		writeIngestAuthError(w, err)
 		return
 	}
@@ -299,7 +301,7 @@ func (g *Gateway) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := g.Client.EnsureDashboardDataView(r.Context(), indexName); err != nil {
+	if err := g.Client.EnsureDashboardDataView(r.Context(), tenantName, indexName); err != nil {
 		writeErrorJSON(w, http.StatusBadGateway, fmt.Sprintf("Dashboards setup failed: %v", err))
 		return
 	}
@@ -345,15 +347,16 @@ func loginErrorResponse(err error) (int, string) {
 	}
 }
 
-func (g *Gateway) authorizeIngestRequest(r *http.Request, indexName string) error {
+func (g *Gateway) authorizeIngestRequest(r *http.Request, indexName string) (string, error) {
 	access, err := g.ingestAccess(r)
 	if err != nil {
-		return err
+		return "", err
 	}
-	if !authz.HasIngestWriteAccess(access, indexName) {
-		return errIngestForbidden
+	namespace, ok := authz.ResolveIngestWriteNamespace(access, indexName)
+	if !ok {
+		return "", errIngestForbidden
 	}
-	return nil
+	return namespace, nil
 }
 
 func (g *Gateway) ingestAccess(r *http.Request) ([]authz.Access, error) {
@@ -527,11 +530,13 @@ func SessionHasNamespace(data session.Data, tenantName string) bool {
 	return false
 }
 
-func sessionDefaultTenant(data session.Data) string {
-	if len(data.Namespaces) != 1 {
-		return ""
+func dashboardsLandingPath(namespaces []string) string {
+	for _, namespace := range namespaces {
+		if trimmed := strings.TrimSpace(namespace); trimmed != "" {
+			return "/dashboards/app/home?security_tenant=" + url.QueryEscape(trimmed)
+		}
 	}
-	return strings.TrimSpace(data.Namespaces[0])
+	return "/dashboards/"
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

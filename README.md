@@ -16,7 +16,7 @@ It is designed for a very specific ingestion model:
 - every document must contain a top-level `event_time`
 - the gateway derives a daily write alias from that timestamp
 - OpenSearch writes go through rollover aliases and backing indices
-- OpenSearch Dashboards gets a per-index tenant and a matching data view automatically
+- OpenSearch Dashboards gets namespace tenants and matching data views automatically
 - LDAP users can sign in through the gateway and reach Dashboards without exposing the admin account
 
 In short, this project gives you a thin HTTP ingest layer and a thin web access layer in front of OpenSearch, with just enough bootstrap logic to make daily rollover-based indexing, tenant-aware Dashboards discovery, and LDAP-backed Dashboards access work without manual setup for each new index family.
@@ -43,7 +43,7 @@ When a client sends a document to `POST /ingest/<index>`, the gateway:
 
 1. validates the path and index name
 2. requires LDAP-backed authentication, either through HTTP Basic auth or an existing gateway session
-3. checks that the authenticated user has write access to that namespace
+3. checks that the authenticated user has write access to the namespace prefix
 4. requires `Content-Type: application/json`
 5. parses the body as a single JSON object
 6. requires top-level `event_time` as a UTC RFC3339 string ending in `Z`
@@ -53,7 +53,7 @@ When a client sends a document to `POST /ingest/<index>`, the gateway:
 <index>-YYYYMMDD-rollover
 ```
 
-8. ensures an OpenSearch Security tenant named exactly `<index>`
+8. ensures an OpenSearch Security tenant named after the owning namespace
 9. ensures an OpenSearch Dashboards data view inside that tenant with pattern:
 
 ```text
@@ -140,8 +140,8 @@ For repeated Basic-authenticated ingest requests, the gateway keeps a process-lo
 Accepted path examples:
 
 ```text
-/ingest/orders
-/ingest/orders/
+/ingest/orders-demo
+/ingest/orders-demo/
 ```
 
 Rejected path examples:
@@ -175,10 +175,13 @@ For ingest, only write-capable groups are accepted:
 - `<namespace>_rw`
 - `<namespace>_rwd`
 
+The ingest index name must be prefixed with that namespace as `<namespace>-<index>`.
+
 Examples:
 
-- a user in `team10_r` can open Dashboards for `team10`, but cannot ingest to `POST /ingest/team10`
-- a user in `team10_rw` can ingest to `POST /ingest/team10`
+- a user in `team10_r` can open Dashboards for `team10`, but cannot ingest to `POST /ingest/team10-hello`
+- a user in `team10_rw` can ingest to `POST /ingest/team10-hello`
+- `POST /ingest/team10` is not accepted for ingest because it does not include a namespace-prefixed index suffix
 
 ### Required document shape
 
@@ -213,7 +216,7 @@ Example:
 ```json
 {
   "result": "created",
-  "write_alias": "orders-20241230-rollover",
+  "write_alias": "orders-demo-20241230-rollover",
   "document_id": "abc123",
   "bootstrapped": true
 }
@@ -235,7 +238,7 @@ The gateway is strict about Dashboards setup for indexed families. If tenant or 
 For an ingest request like:
 
 ```text
-POST /ingest/orders
+POST /ingest/orders-demo
 ```
 
 with:
@@ -249,9 +252,9 @@ with:
 the gateway produces:
 
 - tenant: `orders`
-- Dashboards data view pattern: `orders-*`
-- write alias: `orders-20241230-rollover`
-- first backing index: `orders-20241230-rollover-000001`
+- Dashboards data view pattern: `orders-demo-*`
+- write alias: `orders-demo-20241230-rollover`
+- first backing index: `orders-demo-20241230-rollover-000001`
 
 Writes always go through the alias, not directly to the backing index.
 
@@ -259,7 +262,7 @@ Writes always go through the alias, not directly to the backing index.
 
 For every new index family, the gateway creates:
 
-- an OpenSearch Security tenant named exactly after the index family
+- an OpenSearch Security tenant named after the owning namespace
 - an OpenSearch Dashboards data view inside that tenant
 
 For every successful LDAP login, the gateway also:
@@ -271,19 +274,20 @@ For every successful LDAP login, the gateway also:
 
 That means:
 
-- `orders` data goes with the `orders` tenant
-- the Dashboards data view is created with title `orders-*`
+- `orders-demo` data goes with the `orders` tenant
+- the Dashboards data view is created with title `orders-demo-*`
 - the time field is set to `event_time`
 - a user with LDAP groups `team1_rwd` and `team2_rw` gets roles that map to `team1-*` and `team2-*`
 
-This keeps data-view organization aligned with the ingest namespace.
+This keeps data-view organization aligned with the ingest namespace while still letting each namespace own many concrete index families.
+After the first successful ingest for a concrete family, the gateway remembers that tenant/data-view pair and includes it in tenant-scoped Discover data-view lookups, so users can see both namespace-wide views like `team10-*` and concrete views like `team10-demo-*`.
 
 One important distinction:
 
 - Dashboards visibility is namespace-scoped and can be read-only
 - ingest requires write access for that same namespace
 
-So a user in `team10_r` can browse the `team10` tenant in Dashboards, while a user in `team10_rw` can both browse and ingest into `team10`.
+So a user in `team10_r` can browse the `team10` tenant in Dashboards, while a user in `team10_rw` can both browse and ingest into index families such as `team10-hello`.
 
 ## Local Development Stack
 
@@ -349,7 +353,7 @@ password: dogood
 groups: team10_r
 ```
 
-`johndoe` can sign in and browse the `team10` tenant, but cannot ingest into `team10`.
+`johndoe` can sign in and browse the `team10` tenant, but cannot ingest into `team10-hello`.
 
 ```text
 username: ingestuser
@@ -357,7 +361,7 @@ password: dogood
 groups: team10_rw
 ```
 
-`ingestuser` can ingest into `team10` and also access that namespace in Dashboards.
+`ingestuser` can ingest into `team10-hello` and also access the `team10` namespace in Dashboards.
 
 ## Running the Gateway Without Docker
 
@@ -395,7 +399,8 @@ Current defaults in the code:
 - username defaults to `admin`
 - TLS verification stays enabled by default; set `OPENSEARCH_SKIP_TLS_VERIFY=true` only for local self-signed clusters
 
-Note that per-index data views are created in tenants named after the index, so `DASHBOARDS_TENANT` is not used for those auto-created views. It remains available as the default tenant value for generic Dashboards requests.
+Note that per-index data views are created in tenants named after the owning namespace, so `DASHBOARDS_TENANT` is not used for those auto-created views. It remains available as the default tenant value for generic Dashboards requests.
+For logged-in users, the gateway redirects the initial Dashboards request to the first sorted namespace, such as `team1` for `team1`, `team10`, and `team2`, using the `security_tenant` URL parameter. After that, OpenSearch Dashboards owns tenant selection; the gateway does not force or remember a selected tenant.
 
 ## Route Summary
 
@@ -410,17 +415,17 @@ Note that per-index data views are created in tenants named after the index, so 
 ## Example Ingest
 
 ```bash
-curl -X POST http://localhost:8080/ingest/team10 \
+curl -X POST http://localhost:8080/ingest/team10-hello \
   -u ingestuser:dogood \
   -H 'Content-Type: application/json' \
   -d '{
     "event_time": "2024-12-30T10:11:12Z",
-    "message": "team10 event received",
+    "message": "team10-hello event received",
     "customer_id": 42
   }'
 ```
 
-That example works because `ingestuser` has LDAP group `team10_rw`. If the LDAP user does not have write access for the target namespace, the gateway responds with `403 Forbidden`.
+That example works because `ingestuser` has LDAP group `team10_rw`. If the LDAP user does not have write access for the target namespace prefix, the gateway responds with `403 Forbidden`.
 
 ## Project Files
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 )
 
@@ -37,19 +38,18 @@ func (c *Client) EnsureTenant(ctx context.Context, tenantName string) error {
 	return nil
 }
 
-// EnsureDashboardDataView ensures the tenant-scoped data view for indexName.
-func (c *Client) EnsureDashboardDataView(ctx context.Context, indexName string) error {
+// EnsureDashboardDataView ensures indexName's data view inside tenantName.
+func (c *Client) EnsureDashboardDataView(ctx context.Context, tenantName, indexName string) error {
 	if c.Config.DashboardsURL == "" {
 		return nil
 	}
 
-	if err := c.EnsureTenant(ctx, indexName); err != nil {
+	if err := c.EnsureTenant(ctx, tenantName); err != nil {
 		return err
 	}
 
-	tenantName := indexName
 	dataViewID := BuildDataViewID(indexName)
-	cacheKey := tenantName + "/" + dataViewID
+	cacheKey := BuildDataViewCacheKey(tenantName, indexName)
 	if _, ok := c.EnsuredDataViews.Load(cacheKey); ok {
 		return nil
 	}
@@ -69,7 +69,7 @@ func (c *Client) EnsureDashboardDataView(ctx context.Context, indexName string) 
 		return err
 	}
 
-	c.EnsuredDataViews.Store(cacheKey, true)
+	c.EnsuredDataViews.Store(cacheKey, indexName)
 	return nil
 }
 
@@ -87,6 +87,66 @@ func (c *Client) SetDashboardsDefaultIndex(ctx context.Context, tenantName, data
 // BuildDataViewID returns the deterministic Dashboards data-view id for indexName.
 func BuildDataViewID(indexName string) string {
 	return "gateway-index-pattern-" + indexName
+}
+
+// BuildDataViewCacheKey returns the tenant-scoped cache key for indexName.
+func BuildDataViewCacheKey(tenantName, indexName string) string {
+	return tenantName + "/" + BuildDataViewID(indexName)
+}
+
+// IndexNameFromDataViewID extracts the gateway index name from dataViewID.
+func IndexNameFromDataViewID(dataViewID string) (string, bool) {
+	indexName := strings.TrimPrefix(dataViewID, "gateway-index-pattern-")
+	if indexName == dataViewID || indexName == "" {
+		return "", false
+	}
+	return indexName, true
+}
+
+// BuildDataViewSavedObject returns the saved-object representation for indexName.
+func BuildDataViewSavedObject(indexName string) DashboardsSavedObjectResponse {
+	return DashboardsSavedObjectResponse{
+		ID:   BuildDataViewID(indexName),
+		Type: "index-pattern",
+		Attributes: DashboardsDataViewAttributes{
+			Title:         BuildDataViewPattern(indexName),
+			TimeFieldName: "event_time",
+		},
+		References: []any{},
+	}
+}
+
+// EnsuredDashboardDataViews returns data views known to exist in tenantName.
+func (c *Client) EnsuredDashboardDataViews(tenantName string) []DashboardsSavedObjectResponse {
+	if c == nil {
+		return nil
+	}
+
+	prefix := tenantName + "/"
+	var objects []DashboardsSavedObjectResponse
+	c.EnsuredDataViews.Range(func(key, value any) bool {
+		cacheKey, ok := key.(string)
+		if !ok || !strings.HasPrefix(cacheKey, prefix) {
+			return true
+		}
+
+		dataViewID := strings.TrimPrefix(cacheKey, prefix)
+		indexName, ok := IndexNameFromDataViewID(dataViewID)
+		if !ok {
+			return true
+		}
+		if cachedIndexName, ok := value.(string); ok && cachedIndexName != "" {
+			indexName = cachedIndexName
+		}
+
+		objects = append(objects, BuildDataViewSavedObject(indexName))
+		return true
+	})
+
+	sort.Slice(objects, func(i, j int) bool {
+		return objects[i].ID < objects[j].ID
+	})
+	return objects
 }
 
 // BuildDataViewPattern returns the wildcard pattern used by a tenant data view.

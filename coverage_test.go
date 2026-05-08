@@ -453,7 +453,7 @@ func TestTenantAndDashboardsClientCoverage(t *testing.T) {
 
 	t.Run("ensure dashboard data view without dashboards url is noop", func(t *testing.T) {
 		client := newClient(Config{})
-		if err := client.EnsureDashboardDataView(context.Background(), "orders"); err != nil {
+		if err := client.EnsureDashboardDataView(context.Background(), "orders", "orders"); err != nil {
 			t.Fatalf("expected nil error, got %v", err)
 		}
 	})
@@ -474,7 +474,7 @@ func TestTenantAndDashboardsClientCoverage(t *testing.T) {
 		client := newClient(cfg)
 		client.ensuredDataViews.Store("orders/"+buildDataViewID("orders"), true)
 
-		if err := client.EnsureDashboardDataView(context.Background(), "orders"); err != nil {
+		if err := client.EnsureDashboardDataView(context.Background(), "orders", "orders"); err != nil {
 			t.Fatalf("expected nil error, got %v", err)
 		}
 	})

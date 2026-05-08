@@ -9,6 +9,8 @@ opensearch.ssl.verificationMode: none
 opensearch.username: kibanaserver
 opensearch.password: kibanaserver
 
-opensearch.requestHeadersWhitelist:
+opensearch.requestHeadersAllowlist:
   - Authorization
   - securitytenant
+
+opensearch_security.multitenancy.enabled: true

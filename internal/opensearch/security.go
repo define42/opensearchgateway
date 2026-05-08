@@ -37,7 +37,7 @@ func (c *Client) ProvisionLoginUser(ctx context.Context, username, password stri
 		if err := c.EnsureSecurityRole(ctx, roleName, item); err != nil {
 			return nil, err
 		}
-		if err := c.EnsureDashboardDataView(ctx, item.Namespace); err != nil {
+		if err := c.EnsureDashboardDataView(ctx, item.Namespace, item.Namespace); err != nil {
 			return nil, err
 		}
 
