@@ -270,7 +270,8 @@ func encodeSessionCookieValue(g *Gateway, token string) (string, error) {
 func mustEncodeSessionCookieValue(tb interface {
 	Helper()
 	Fatalf(string, ...any)
-}, g *Gateway, token string) string {
+}, g *Gateway, token string,
+) string {
 	tb.Helper()
 	encoded, err := encodeSessionCookieValue(g, token)
 	if err != nil {
