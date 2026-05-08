@@ -16,6 +16,7 @@ import (
 	ldappkg "github.com/define42/opensearchgateway/internal/ldap"
 	"github.com/define42/opensearchgateway/internal/opensearch"
 	"github.com/define42/opensearchgateway/internal/session"
+	"github.com/gorilla/securecookie"
 )
 
 // SessionCookieName is the cookie that carries the gateway session token.
@@ -35,6 +36,7 @@ type Gateway struct {
 	Authenticate    AuthenticateFunc
 	Sessions        *session.Store
 	IngestAuthCache *ingest.AuthCache
+	SecureCookie    *securecookie.SecureCookie
 }
 
 // LoginPageData is the template model for the login form.
@@ -69,7 +71,33 @@ func New(client *opensearch.Client, authenticate AuthenticateFunc) *Gateway {
 		Authenticate:    authenticate,
 		Sessions:        session.NewStore(),
 		IngestAuthCache: ingest.NewAuthCache(),
+		SecureCookie:    newSecureCookie(),
 	}
+}
+
+// newSecureCookie builds a securecookie codec with freshly generated keys.
+// Keys are generated per process so cookies do not survive a restart.
+func newSecureCookie() *securecookie.SecureCookie {
+	hashKey := securecookie.GenerateRandomKey(64)
+	blockKey := securecookie.GenerateRandomKey(32)
+	return securecookie.New(hashKey, blockKey)
+}
+
+// EncodeSessionCookieValue encodes the supplied session token using the
+// gateway's securecookie codec. It is exported primarily so tests can
+// produce valid session cookies.
+func (g *Gateway) EncodeSessionCookieValue(token string) (string, error) {
+	return g.SecureCookie.Encode(SessionCookieName, token)
+}
+
+// decodeSessionCookieValue decodes the supplied cookie value back into a
+// session token, or returns an error if the value is missing or invalid.
+func (g *Gateway) decodeSessionCookieValue(value string) (string, error) {
+	var token string
+	if err := g.SecureCookie.Decode(SessionCookieName, value, &token); err != nil {
+		return "", err
+	}
+	return token, nil
 }
 
 // Handler builds the HTTP mux for the gateway routes.
@@ -135,8 +163,8 @@ func (g *Gateway) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 	if token, _, ok := g.currentSession(r); ok {
 		g.Sessions.Delete(token)
-	} else if cookie, err := r.Cookie(SessionCookieName); err == nil {
-		g.Sessions.Delete(cookie.Value)
+	} else if token, ok := g.readSessionCookie(r); ok {
+		g.Sessions.Delete(token)
 	}
 
 	g.clearSessionCookie(w, r)
@@ -224,8 +252,8 @@ func (g *Gateway) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if cookie, err := r.Cookie(SessionCookieName); err == nil {
-		g.Sessions.Delete(cookie.Value)
+	if token, ok := g.readSessionCookie(r); ok {
+		g.Sessions.Delete(token)
 	}
 
 	token, expiresAt, err := g.Sessions.Create(session.Data{
@@ -414,23 +442,44 @@ func mimeParse(mediaType string) (string, map[string]string, error) {
 }
 
 func (g *Gateway) currentSession(r *http.Request) (string, session.Data, bool) {
-	cookie, err := r.Cookie(SessionCookieName)
-	if err != nil {
+	token, ok := g.readSessionCookie(r)
+	if !ok {
 		return "", session.Data{}, false
 	}
 
-	sessionData, ok := g.Sessions.Get(cookie.Value)
+	sessionData, ok := g.Sessions.Get(token)
 	if !ok {
-		return cookie.Value, session.Data{}, false
+		return token, session.Data{}, false
 	}
-	return cookie.Value, sessionData, true
+	return token, sessionData, true
+}
+
+// readSessionCookie returns the decoded session token from the request's
+// session cookie, or false if the cookie is missing or fails verification.
+func (g *Gateway) readSessionCookie(r *http.Request) (string, bool) {
+	cookie, err := r.Cookie(SessionCookieName)
+	if err != nil {
+		return "", false
+	}
+	token, err := g.decodeSessionCookieValue(cookie.Value)
+	if err != nil {
+		return "", false
+	}
+	return token, true
 }
 
 func (g *Gateway) setSessionCookie(w http.ResponseWriter, r *http.Request, token string, expiresAt time.Time) {
+	encoded, err := g.EncodeSessionCookieValue(token)
+	if err != nil {
+		// Encoding only fails if the codec is misconfigured; surface as a
+		// server error rather than silently dropping the session cookie.
+		http.Error(w, "failed to encode session cookie", http.StatusInternalServerError)
+		return
+	}
 	// #nosec G124 -- Secure is intentionally enabled only for HTTPS so local HTTP development remains usable.
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionCookieName,
-		Value:    token,
+		Value:    encoded,
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,

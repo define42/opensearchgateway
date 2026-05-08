@@ -257,3 +257,24 @@ func randomToken() (string, error) {
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
+
+// encodeSessionCookieValue produces a session-cookie value signed by the
+// gateway's securecookie codec. Used by tests that need to inject a valid
+// session cookie.
+func encodeSessionCookieValue(g *Gateway, token string) (string, error) {
+	return g.EncodeSessionCookieValue(token)
+}
+
+// mustEncodeSessionCookieValue is the test-friendly wrapper around
+// encodeSessionCookieValue that fails the test on encoding errors.
+func mustEncodeSessionCookieValue(tb interface {
+	Helper()
+	Fatalf(string, ...any)
+}, g *Gateway, token string) string {
+	tb.Helper()
+	encoded, err := encodeSessionCookieValue(g, token)
+	if err != nil {
+		tb.Fatalf("encode session cookie: %v", err)
+	}
+	return encoded
+}
