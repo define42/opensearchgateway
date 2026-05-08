@@ -11,7 +11,7 @@ OpenSearchGateway is a small Go web server that sits in front of an OpenSearch c
 
 It is designed for a very specific ingestion model:
 
-- clients send JSON to `POST /ingest/<index>`
+- clients send JSON to `POST /ingest/<namespace>-<index>`
 - clients authenticate to `/ingest` with LDAP credentials or an existing gateway session
 - every document must contain a top-level `event_time`
 - the gateway derives a daily write alias from that timestamp
@@ -39,9 +39,9 @@ When a user signs in through `POST /login`, the gateway:
 6. stores a short-lived server-side session
 7. reverse proxies OpenSearch Dashboards under `/dashboards` using the logged-in user's basic auth
 
-When a client sends a document to `POST /ingest/<index>`, the gateway:
+When a client sends a document to `POST /ingest/<namespace>-<index>`, the gateway:
 
-1. validates the path and index name
+1. validates the path and prefixed index-family name
 2. requires LDAP-backed authentication, either through HTTP Basic auth or an existing gateway session
 3. checks that the authenticated user has write access to the namespace prefix
 4. requires `Content-Type: application/json`
@@ -50,21 +50,21 @@ When a client sends a document to `POST /ingest/<index>`, the gateway:
 7. derives the write alias as:
 
 ```text
-<index>-YYYYMMDD-rollover
+<namespace>-<index>-YYYYMMDD-rollover
 ```
 
 8. ensures an OpenSearch Security tenant named after the owning namespace
 9. ensures an OpenSearch Dashboards data view inside that tenant with pattern:
 
 ```text
-<index>-*
+<namespace>-<index>-*
 ```
 
 10. checks whether the daily write alias exists
 11. if missing, creates the first backing index:
 
 ```text
-<index>-YYYYMMDD-rollover-000001
+<namespace>-<index>-YYYYMMDD-rollover-000001
 ```
 
 12. attaches the rollover alias and ISM policy
@@ -97,7 +97,7 @@ Serves the gateway login page.
 
 ### `POST /login`
 
-Authenticates the submitted LDAP credentials, provisions the user's OpenSearch roles and internal user, creates a gateway session, and redirects to `/dashboards/` on success.
+Authenticates the submitted LDAP credentials, provisions the user's OpenSearch roles and internal user, creates a gateway session, and redirects to `/dashboards/app/home` on success.
 
 Login responses:
 
@@ -119,16 +119,16 @@ Reverse proxies OpenSearch Dashboards through the gateway. These routes require 
 
 Serves a small demo page where you can:
 
-- enter an index name
+- enter a namespace-prefixed index family
 - enter LDAP credentials when you want to ingest directly from the browser
 - paste a JSON document
 - submit it directly to the gateway from the browser
 
 If you are already signed in through `/login`, the demo page can also reuse that gateway session instead of sending explicit Basic auth credentials.
 
-### `POST /ingest/<index>`
+### `POST /ingest/<namespace>-<index>`
 
-Primary ingest endpoint.
+Primary ingest endpoint. The path segment is the full logical index family and must include the owning namespace prefix.
 
 This endpoint now requires authentication. The gateway accepts either:
 
@@ -224,7 +224,7 @@ Example:
 
 ### Error behavior
 
-- `401` when `/ingest/<index>` is called without valid LDAP credentials
+- `401` when `/ingest/<namespace>-<index>` is called without valid LDAP credentials
 - `403` when LDAP auth succeeds but the user does not have write access to that namespace
 - `400` for request validation errors
 - `405` for wrong HTTP methods
@@ -284,7 +284,7 @@ After the first successful ingest for a concrete family, the gateway creates the
 
 One important distinction:
 
-- Dashboards visibility is namespace-scoped and can be read-only
+- OpenSearch data visibility is namespace-scoped and can be read-only
 - ingest requires write access for that same namespace
 
 So a user in `team10_r` can browse the `team10` tenant in Dashboards, while a user in `team10_rw` can both browse and ingest into index families such as `team10-hello`.
@@ -399,7 +399,7 @@ Current defaults in the code:
 - username defaults to `admin`
 - TLS verification stays enabled by default; set `OPENSEARCH_SKIP_TLS_VERIFY=true` only for local self-signed clusters
 
-Note that per-index data views are created in tenants named after the owning namespace, so `DASHBOARDS_TENANT` is not used for those auto-created views. It remains available as the default tenant value for generic Dashboards requests.
+Note that per-index data views are created in tenants named after the owning namespace, so `DASHBOARDS_TENANT` is not used for those auto-created views. It remains available as the default tenant value for gateway-internal Dashboards API calls that do not provide an explicit tenant.
 For logged-in users, the gateway redirects to Dashboards without selecting a tenant. OpenSearch Dashboards owns tenant selection, including switching between custom tenants.
 The gateway does not rewrite proxied Dashboards responses. It only uses the Dashboards saved-object API for gateway-managed data-view creation, and concrete ingest data views do not replace an existing tenant default.
 
@@ -411,7 +411,7 @@ The gateway does not rewrite proxied Dashboards responses. It only uses the Dash
 - `POST /logout` clears the session
 - `GET /dashboards/*` proxies OpenSearch Dashboards for authenticated users
 - `GET /demo` serves the browser demo ingest form
-- `POST /ingest/<index>` ingests a JSON document into the rollover alias for that index family
+- `POST /ingest/<namespace>-<index>` ingests a JSON document into the rollover alias for that index family
 
 ## Example Ingest
 
@@ -442,7 +442,7 @@ That example works because `ingestuser` has LDAP group `team10_rw`. If the LDAP 
 
 ## Development Notes
 
-- the HTTP client disables TLS verification for OpenSearch, which is convenient for local development but not production-safe
+- OpenSearch TLS verification is enabled by default; use `OPENSEARCH_SKIP_TLS_VERIFY=true` only for local self-signed clusters
 - `/ingest` now requires LDAP authentication plus namespace write access
 - batching is not implemented; each request indexes one JSON document
 - the index template and ISM policy are shared, global bootstrap resources
