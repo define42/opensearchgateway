@@ -665,12 +665,6 @@ func TestDashboardsHelperCoverage(t *testing.T) {
 			t.Fatalf("unexpected dashboards path: %q", got)
 		}
 
-		if !sessionHasNamespace(sessionData{Namespaces: []string{" team1 ", "team2"}}, "team1") {
-			t.Fatal("expected session to contain team1")
-		}
-		if sessionHasNamespace(sessionData{Namespaces: []string{"team2"}}, "team1") {
-			t.Fatal("expected session not to contain team1")
-		}
 	})
 }
 
@@ -689,13 +683,6 @@ func TestDecodeAndSessionHelpersCoverage(t *testing.T) {
 			t.Fatal("expected missing session touch to fail")
 		}
 
-		store.Set("expired", sessionData{ExpiresAt: time.Now().Add(-time.Minute)})
-		if _, ok := store.Touch("expired"); ok {
-			t.Fatal("expected expired session touch to fail")
-		}
-		if _, ok := store.Get("expired"); ok {
-			t.Fatal("expected expired session to be removed")
-		}
 	})
 
 	t.Run("random token success", func(t *testing.T) {

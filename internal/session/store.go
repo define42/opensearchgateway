@@ -107,16 +107,6 @@ func (s *Store) Delete(token string) {
 	delete(s.sessions, token)
 }
 
-// Set stores token with data, replacing any previous value.
-func (s *Store) Set(token string, data Data) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.sessions == nil {
-		s.sessions = make(map[string]Data)
-	}
-	s.sessions[token] = data
-}
-
 func randomToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {

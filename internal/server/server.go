@@ -522,16 +522,6 @@ func ForwardedProto(r *http.Request) string {
 	return "http"
 }
 
-// SessionHasNamespace reports whether tenantName is in the session namespace list.
-func SessionHasNamespace(data session.Data, tenantName string) bool {
-	for _, namespace := range data.Namespaces {
-		if strings.TrimSpace(namespace) == tenantName {
-			return true
-		}
-	}
-	return false
-}
-
 func dashboardsLandingPath() string {
 	return "/dashboards/app/home"
 }

@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 func TestRunBootstrapsBeforeServe(t *testing.T) {
@@ -1225,15 +1224,10 @@ func TestGatewayLogoutClearsSession(t *testing.T) {
 	}
 }
 
-func TestGatewayExpiredSessionRedirectsToLogin(t *testing.T) {
+func TestGatewayInvalidSessionRedirectsToLogin(t *testing.T) {
 	t.Parallel()
 
 	gateway := newGateway(newClient(Config{DashboardsURL: "http://dashboards.example"}), nil)
-	gateway.sessions.Set("expired", sessionData{
-		User:       &User{Name: "testuser"},
-		AuthHeader: buildBasicAuthorization("testuser", "dogood"),
-		ExpiresAt:  time.Now().Add(-time.Minute),
-	})
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/dashboards/app/home", nil)

@@ -212,10 +212,6 @@ func dashboardsAPIPath(path string) string {
 	return opensearchpkg.DashboardsAPIPath(path)
 }
 
-func sessionHasNamespace(data sessionData, tenantName string) bool {
-	return serverpkg.SessionHasNamespace(data, tenantName)
-}
-
 func buildBasicAuthorization(username, password string) string {
 	return serverpkg.BuildBasicAuthorization(username, password)
 }
