@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
 )
 
@@ -65,12 +64,53 @@ func (c *Client) EnsureDashboardDataView(ctx context.Context, tenantName, indexN
 	if err := c.DoDashboardsJSONInTenant(ctx, tenantName, http.MethodPost, path, body, nil, []int{http.StatusOK, http.StatusCreated}); err != nil {
 		return err
 	}
-	if err := c.SetDashboardsDefaultIndex(ctx, tenantName, dataViewID); err != nil {
+	if err := c.ensureDashboardsDefaultIndex(ctx, tenantName, indexName, dataViewID); err != nil {
 		return err
 	}
 
 	c.EnsuredDataViews.Store(cacheKey, indexName)
 	return nil
+}
+
+func (c *Client) ensureDashboardsDefaultIndex(ctx context.Context, tenantName, indexName, dataViewID string) error {
+	if tenantName == indexName {
+		return c.SetDashboardsDefaultIndex(ctx, tenantName, dataViewID)
+	}
+	return c.SetDashboardsDefaultIndexIfMissing(ctx, tenantName, dataViewID)
+}
+
+// SetDashboardsDefaultIndexIfMissing sets the tenant default only when no default exists.
+func (c *Client) SetDashboardsDefaultIndexIfMissing(ctx context.Context, tenantName, dataViewID string) error {
+	if _, ok, err := c.DashboardsDefaultIndex(ctx, tenantName); err != nil {
+		return err
+	} else if ok {
+		return nil
+	}
+	return c.SetDashboardsDefaultIndex(ctx, tenantName, dataViewID)
+}
+
+// DashboardsDefaultIndex returns the current tenant default data-view id, if set.
+func (c *Client) DashboardsDefaultIndex(ctx context.Context, tenantName string) (string, bool, error) {
+	var response DashboardsSettingsResponse
+	err := c.DoDashboardsJSONInTenant(ctx, tenantName, http.MethodGet, "/api/opensearch-dashboards/settings/defaultIndex", nil, &response, []int{http.StatusOK})
+	if err != nil {
+		if IsNotFoundResponse(err) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("get Dashboards default index for tenant %q: %w", tenantName, err)
+	}
+
+	setting, ok := response.Settings["defaultIndex"]
+	if !ok {
+		return "", false, nil
+	}
+	if value := dashboardsSettingString(setting.UserValue); value != "" {
+		return value, true, nil
+	}
+	if value := dashboardsSettingString(setting.Value); value != "" {
+		return value, true, nil
+	}
+	return "", false, nil
 }
 
 // SetDashboardsDefaultIndex sets the default data view inside tenantName.
@@ -94,61 +134,6 @@ func BuildDataViewCacheKey(tenantName, indexName string) string {
 	return tenantName + "/" + BuildDataViewID(indexName)
 }
 
-// IndexNameFromDataViewID extracts the gateway index name from dataViewID.
-func IndexNameFromDataViewID(dataViewID string) (string, bool) {
-	indexName := strings.TrimPrefix(dataViewID, "gateway-index-pattern-")
-	if indexName == dataViewID || indexName == "" {
-		return "", false
-	}
-	return indexName, true
-}
-
-// BuildDataViewSavedObject returns the saved-object representation for indexName.
-func BuildDataViewSavedObject(indexName string) DashboardsSavedObjectResponse {
-	return DashboardsSavedObjectResponse{
-		ID:   BuildDataViewID(indexName),
-		Type: "index-pattern",
-		Attributes: DashboardsDataViewAttributes{
-			Title:         BuildDataViewPattern(indexName),
-			TimeFieldName: "event_time",
-		},
-		References: []any{},
-	}
-}
-
-// EnsuredDashboardDataViews returns data views known to exist in tenantName.
-func (c *Client) EnsuredDashboardDataViews(tenantName string) []DashboardsSavedObjectResponse {
-	if c == nil {
-		return nil
-	}
-
-	prefix := tenantName + "/"
-	var objects []DashboardsSavedObjectResponse
-	c.EnsuredDataViews.Range(func(key, value any) bool {
-		cacheKey, ok := key.(string)
-		if !ok || !strings.HasPrefix(cacheKey, prefix) {
-			return true
-		}
-
-		dataViewID := strings.TrimPrefix(cacheKey, prefix)
-		indexName, ok := IndexNameFromDataViewID(dataViewID)
-		if !ok {
-			return true
-		}
-		if cachedIndexName, ok := value.(string); ok && cachedIndexName != "" {
-			indexName = cachedIndexName
-		}
-
-		objects = append(objects, BuildDataViewSavedObject(indexName))
-		return true
-	})
-
-	sort.Slice(objects, func(i, j int) bool {
-		return objects[i].ID < objects[j].ID
-	})
-	return objects
-}
-
 // BuildDataViewPattern returns the wildcard pattern used by a tenant data view.
 func BuildDataViewPattern(indexName string) string {
 	return indexName + "-*"
@@ -163,4 +148,11 @@ func DashboardsAPIPath(path string) string {
 		return "/dashboards" + path
 	}
 	return "/dashboards/" + path
+}
+
+func dashboardsSettingString(value any) string {
+	if text, ok := value.(string); ok {
+		return strings.TrimSpace(text)
+	}
+	return ""
 }

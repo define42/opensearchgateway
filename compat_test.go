@@ -22,21 +22,20 @@ import (
 )
 
 type (
-	Config                 = appconfig.Config
-	LDAPConfig             = appconfig.LDAPConfig
-	User                   = authzpkg.User
-	Access                 = authzpkg.Access
-	ldapAuthenticator      = serverpkg.AuthenticateFunc
-	sessionData            = sessionpkg.Data
-	ingestResponse         = serverpkg.IngestResponse
-	errorResponse          = serverpkg.ErrorResponse
-	loginPageData          = serverpkg.LoginPageData
-	ResponseError          = opensearchpkg.ResponseError
-	dashboardsFindResponse = opensearchpkg.DashboardsFindResponse
-	securityRoleRequest    = opensearchpkg.SecurityRoleRequest
-	ismPolicyResponse      = opensearchpkg.ISMPolicyResponse
-	ismPolicy              = opensearchpkg.ISMPolicy
-	ingestAuthCache        = ingestpkg.AuthCache
+	Config              = appconfig.Config
+	LDAPConfig          = appconfig.LDAPConfig
+	User                = authzpkg.User
+	Access              = authzpkg.Access
+	ldapAuthenticator   = serverpkg.AuthenticateFunc
+	sessionData         = sessionpkg.Data
+	ingestResponse      = serverpkg.IngestResponse
+	errorResponse       = serverpkg.ErrorResponse
+	loginPageData       = serverpkg.LoginPageData
+	ResponseError       = opensearchpkg.ResponseError
+	securityRoleRequest = opensearchpkg.SecurityRoleRequest
+	ismPolicyResponse   = opensearchpkg.ISMPolicyResponse
+	ismPolicy           = opensearchpkg.ISMPolicy
+	ingestAuthCache     = ingestpkg.AuthCache
 )
 
 const (
@@ -133,10 +132,6 @@ func (g *Gateway) renderLoginPage(w http.ResponseWriter, status int, data loginP
 	g.RenderLoginPage(w, status, data)
 }
 
-func (g *Gateway) modifyDashboardsResponse(resp *http.Response, data sessionData) error {
-	return g.ModifyDashboardsResponse(resp, data)
-}
-
 func (c *Client) setDashboardsDefaultIndex(ctx context.Context, tenantName, dataViewID string) error {
 	return c.SetDashboardsDefaultIndex(ctx, tenantName, dataViewID)
 }
@@ -215,14 +210,6 @@ func buildDataViewID(indexName string) string {
 
 func dashboardsAPIPath(path string) string {
 	return opensearchpkg.DashboardsAPIPath(path)
-}
-
-func isDashboardsIndexPatternFindRequest(req *http.Request) bool {
-	return serverpkg.IsDashboardsIndexPatternFindRequest(req)
-}
-
-func matchesIndexPatternFindQuery(values url.Values, tenantName string) bool {
-	return serverpkg.MatchesIndexPatternFindQuery(values, tenantName)
 }
 
 func sessionHasNamespace(data sessionData, tenantName string) bool {

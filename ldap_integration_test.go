@@ -99,9 +99,9 @@ func TestLDAPIngestUserCanIngestTeam10(t *testing.T) {
 		case "POST /dashboards/api/saved_objects/index-pattern/gateway-index-pattern-team10-hello?overwrite=true":
 			w.WriteHeader(http.StatusOK)
 			_, _ = io.WriteString(w, `{}`)
-		case "POST /dashboards/api/opensearch-dashboards/settings/defaultIndex":
+		case "GET /dashboards/api/opensearch-dashboards/settings/defaultIndex":
 			w.WriteHeader(http.StatusOK)
-			_, _ = io.WriteString(w, `{}`)
+			_, _ = io.WriteString(w, `{"settings":{"defaultIndex":{"userValue":"gateway-index-pattern-team10"}}}`)
 		default:
 			t.Fatalf("unexpected Dashboards request: %s %s", r.Method, r.URL.RequestURI())
 		}

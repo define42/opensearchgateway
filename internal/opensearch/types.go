@@ -64,25 +64,20 @@ type DashboardsDataViewAttributes struct {
 	TimeFieldName string `json:"timeFieldName"`
 }
 
-// DashboardsSavedObjectResponse is the saved object representation returned by Dashboards.
-type DashboardsSavedObjectResponse struct {
-	ID         string                       `json:"id"`
-	Type       string                       `json:"type"`
-	Attributes DashboardsDataViewAttributes `json:"attributes"`
-	References []any                        `json:"references,omitempty"`
-}
-
-// DashboardsFindResponse is the response from Dashboards saved object search.
-type DashboardsFindResponse struct {
-	Page         int                             `json:"page"`
-	PerPage      int                             `json:"per_page"`
-	Total        int                             `json:"total"`
-	SavedObjects []DashboardsSavedObjectResponse `json:"saved_objects"`
-}
-
 // DashboardsSettingValueRequest writes a Dashboards advanced setting value.
 type DashboardsSettingValueRequest struct {
 	Value string `json:"value"`
+}
+
+// DashboardsSettingsResponse reads Dashboards advanced setting values.
+type DashboardsSettingsResponse struct {
+	Settings map[string]DashboardsSettingResponse `json:"settings"`
+}
+
+// DashboardsSettingResponse captures a single Dashboards advanced setting.
+type DashboardsSettingResponse struct {
+	UserValue any `json:"userValue,omitempty"`
+	Value     any `json:"value,omitempty"`
 }
 
 // TenantRequest creates an OpenSearch tenant.

@@ -255,7 +255,7 @@ func TestEnsureTenantReturnsErrorOnFailure(t *testing.T) {
 	}
 }
 
-func TestEnsureDashboardDataViewCreatesExpectedPattern(t *testing.T) {
+func TestEnsureDashboardDataViewCreatesExpectedPatternWithoutOverwritingDefault(t *testing.T) {
 	t.Parallel()
 
 	var openSearchCalls []string
@@ -271,7 +271,7 @@ func TestEnsureDashboardDataViewCreatesExpectedPattern(t *testing.T) {
 	defer openSearch.Close()
 
 	var requestBody map[string]any
-	var defaultIndexBody map[string]any
+	var defaultIndexGets int
 	dashboards := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("osd-xsrf"); got != "true" {
 			t.Fatalf("expected osd-xsrf header, got %q", got)
@@ -284,10 +284,10 @@ func TestEnsureDashboardDataViewCreatesExpectedPattern(t *testing.T) {
 			requestBody = decodeRequestBody(t, r)
 			w.WriteHeader(http.StatusOK)
 			_, _ = io.WriteString(w, `{}`)
-		case "POST /dashboards/api/opensearch-dashboards/settings/defaultIndex":
-			defaultIndexBody = decodeRequestBody(t, r)
+		case "GET /dashboards/api/opensearch-dashboards/settings/defaultIndex":
+			defaultIndexGets++
 			w.WriteHeader(http.StatusOK)
-			_, _ = io.WriteString(w, `{}`)
+			_, _ = io.WriteString(w, `{"settings":{"defaultIndex":{"userValue":"gateway-index-pattern-team10"}}}`)
 		default:
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.RequestURI())
 		}
@@ -313,12 +313,11 @@ func TestEnsureDashboardDataViewCreatesExpectedPattern(t *testing.T) {
 	if got := attributes["timeFieldName"]; got != "event_time" {
 		t.Fatalf("unexpected time field: %#v", got)
 	}
-	if got := defaultIndexBody["value"]; got != "gateway-index-pattern-team10-hello" {
-		t.Fatalf("unexpected default index body: %#v", defaultIndexBody)
+	if defaultIndexGets != 1 {
+		t.Fatalf("expected one default-index lookup, got %d", defaultIndexGets)
 	}
-	ensured := client.EnsuredDashboardDataViews("team10")
-	if len(ensured) != 1 || ensured[0].Attributes.Title != "team10-hello-*" {
-		t.Fatalf("expected ensured data-view cache to contain team10-hello, got %#v", ensured)
+	if _, ok := client.ensuredDataViews.Load("team10/" + buildDataViewID("team10-hello")); !ok {
+		t.Fatal("expected ensured data-view cache to contain team10-hello")
 	}
 }
 
@@ -361,10 +360,10 @@ func TestGatewayIngestEnsuresDashboardDataView(t *testing.T) {
 			appendCall("data-view-post")
 			w.WriteHeader(http.StatusOK)
 			_, _ = io.WriteString(w, `{}`)
-		case "POST /dashboards/api/opensearch-dashboards/settings/defaultIndex":
-			appendCall("default-index-post")
+		case "GET /dashboards/api/opensearch-dashboards/settings/defaultIndex":
+			appendCall("default-index-get")
 			w.WriteHeader(http.StatusOK)
-			_, _ = io.WriteString(w, `{}`)
+			_, _ = io.WriteString(w, `{"settings":{"defaultIndex":{"userValue":"gateway-index-pattern-orders"}}}`)
 		default:
 			t.Fatalf("unexpected Dashboards request: %s %s", r.Method, r.URL.RequestURI())
 		}
@@ -384,7 +383,7 @@ func TestGatewayIngestEnsuresDashboardDataView(t *testing.T) {
 	if !reflect.DeepEqual(calls, []string{
 		"tenant-get",
 		"data-view-post",
-		"default-index-post",
+		"default-index-get",
 		"alias-head",
 		"doc-post",
 	}) {
@@ -527,8 +526,8 @@ func TestGatewayAuthenticatedLoginRedirectsToDashboards(t *testing.T) {
 	if recorder.Code != http.StatusSeeOther {
 		t.Fatalf("expected status 303, got %d", recorder.Code)
 	}
-	if got := recorder.Header().Get("Location"); got != "/dashboards/app/home?security_tenant=team1" {
-		t.Fatalf("expected redirect to first namespace tenant, got %q", got)
+	if got := recorder.Header().Get("Location"); got != "/dashboards/app/home" {
+		t.Fatalf("expected redirect to Dashboards home, got %q", got)
 	}
 }
 
@@ -715,8 +714,8 @@ func TestGatewayLoginSuccessProvisionsUserAndSession(t *testing.T) {
 	if recorder.Code != http.StatusSeeOther {
 		t.Fatalf("expected status 303, got %d: %s", recorder.Code, recorder.Body.String())
 	}
-	if got := recorder.Header().Get("Location"); got != "/dashboards/app/home?security_tenant=team1" {
-		t.Fatalf("expected redirect to first namespace tenant, got %q", got)
+	if got := recorder.Header().Get("Location"); got != "/dashboards/app/home" {
+		t.Fatalf("expected redirect to Dashboards home, got %q", got)
 	}
 	if !strings.Contains(recorder.Header().Get("Set-Cookie"), sessionCookieName+"=") {
 		t.Fatalf("expected session cookie, got %q", recorder.Header().Get("Set-Cookie"))
@@ -792,7 +791,7 @@ func TestGatewayLoginSuccessProvisionsUserAndSession(t *testing.T) {
 	}
 }
 
-func TestGatewayLoginMultiNamespaceRedirectsToFirstTenant(t *testing.T) {
+func TestGatewayLoginMultiNamespaceRedirectsToDashboardsHome(t *testing.T) {
 	t.Parallel()
 
 	var userBody map[string]any
@@ -860,8 +859,8 @@ func TestGatewayLoginMultiNamespaceRedirectsToFirstTenant(t *testing.T) {
 	if loginRecorder.Code != http.StatusSeeOther {
 		t.Fatalf("expected login status 303, got %d: %s", loginRecorder.Code, loginRecorder.Body.String())
 	}
-	if got := loginRecorder.Header().Get("Location"); got != "/dashboards/app/home?security_tenant=team1" {
-		t.Fatalf("expected redirect to first namespace tenant, got %q", got)
+	if got := loginRecorder.Header().Get("Location"); got != "/dashboards/app/home" {
+		t.Fatalf("expected redirect to Dashboards home, got %q", got)
 	}
 	cookies := loginRecorder.Result().Cookies()
 	if len(cookies) == 0 {
@@ -1096,7 +1095,7 @@ func TestGatewayDashboardsProxyForwardsTenantSelectionQuery(t *testing.T) {
 	}
 }
 
-func TestGatewayDashboardsProxySynthesizesTenantIndexPatternFindResults(t *testing.T) {
+func TestGatewayDashboardsProxyLeavesEmptyIndexPatternFindResultsUntouched(t *testing.T) {
 	t.Parallel()
 
 	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1104,15 +1103,13 @@ func TestGatewayDashboardsProxySynthesizesTenantIndexPatternFindResults(t *testi
 	}))
 	defer openSearch.Close()
 
+	const upstreamBody = `{"page":1,"per_page":10000,"total":0,"saved_objects":[]}`
 	dashboards := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("securitytenant"); got != "team1" {
-			t.Fatalf("expected securitytenant header, got %q", got)
-		}
 		if r.Method != http.MethodGet || r.URL.Path != "/dashboards/api/saved_objects/_find" {
 			t.Fatalf("unexpected Dashboards request: %s %s", r.Method, r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"page":1,"per_page":10000,"total":0,"saved_objects":[]}`)
+		_, _ = io.WriteString(w, upstreamBody)
 	}))
 	defer dashboards.Close()
 
@@ -1128,7 +1125,6 @@ func TestGatewayDashboardsProxySynthesizesTenantIndexPatternFindResults(t *testi
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/dashboards/api/saved_objects/_find?fields=title&per_page=10000&type=index-pattern", nil)
-	request.Header.Set("securitytenant", "team1")
 	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: mustEncodeSessionCookieValue(t, gateway, token), Expires: expiresAt})
 
 	gateway.Handler().ServeHTTP(recorder, request)
@@ -1136,76 +1132,8 @@ func TestGatewayDashboardsProxySynthesizesTenantIndexPatternFindResults(t *testi
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d: %s", recorder.Code, recorder.Body.String())
 	}
-
-	var payload dashboardsFindResponse
-	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("decode proxy response: %v", err)
-	}
-	if payload.Total != 1 || len(payload.SavedObjects) != 1 {
-		t.Fatalf("expected synthesized saved object, got %#v", payload)
-	}
-	if got := payload.SavedObjects[0].ID; got != buildDataViewID("team1") {
-		t.Fatalf("unexpected data view id: %q", got)
-	}
-	if got := payload.SavedObjects[0].Attributes.Title; got != "team1-*" {
-		t.Fatalf("unexpected data view title: %q", got)
-	}
-}
-
-func TestGatewayDashboardsProxyAddsEnsuredIndexPatternFindResults(t *testing.T) {
-	t.Parallel()
-
-	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
-	}))
-	defer openSearch.Close()
-
-	dashboards := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("securitytenant"); got != "team1" {
-			t.Fatalf("expected securitytenant header, got %q", got)
-		}
-		if r.Method != http.MethodGet || r.URL.Path != "/dashboards/api/saved_objects/_find" {
-			t.Fatalf("unexpected Dashboards request: %s %s", r.Method, r.URL.Path)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"page":1,"per_page":10000,"total":1,"saved_objects":[{"id":"gateway-index-pattern-team1","type":"index-pattern","attributes":{"title":"team1-*","timeFieldName":"event_time"}}]}`)
-	}))
-	defer dashboards.Close()
-
-	gateway := newGateway(newClient(testConfigWithDashboards(openSearch, dashboards)), nil)
-	gateway.Client.MarkDataViewEnsured("team1/" + buildDataViewID("team1-demo"))
-	token, expiresAt, err := gateway.sessions.Create(sessionData{
-		User:       &User{Name: "testuser"},
-		AuthHeader: buildBasicAuthorization("testuser", "dogood"),
-		Namespaces: []string{"team1"},
-	})
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
-
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/dashboards/api/saved_objects/_find?fields=title&per_page=10000&type=index-pattern", nil)
-	request.Header.Set("securitytenant", "team1")
-	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: mustEncodeSessionCookieValue(t, gateway, token), Expires: expiresAt})
-
-	gateway.Handler().ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d: %s", recorder.Code, recorder.Body.String())
-	}
-
-	var payload dashboardsFindResponse
-	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("decode proxy response: %v", err)
-	}
-	if payload.Total != 2 || len(payload.SavedObjects) != 2 {
-		t.Fatalf("expected upstream and ensured saved objects, got %#v", payload)
-	}
-	if got := payload.SavedObjects[1].ID; got != buildDataViewID("team1-demo") {
-		t.Fatalf("unexpected ensured data view id: %q", got)
-	}
-	if got := payload.SavedObjects[1].Attributes.Title; got != "team1-demo-*" {
-		t.Fatalf("unexpected ensured data view title: %q", got)
+	if body := strings.TrimSpace(recorder.Body.String()); body != upstreamBody {
+		t.Fatalf("expected upstream body to pass through, got %s", body)
 	}
 }
 

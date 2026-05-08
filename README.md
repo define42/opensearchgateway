@@ -280,7 +280,7 @@ That means:
 - a user with LDAP groups `team1_rwd` and `team2_rw` gets roles that map to `team1-*` and `team2-*`
 
 This keeps data-view organization aligned with the ingest namespace while still letting each namespace own many concrete index families.
-After the first successful ingest for a concrete family, the gateway remembers that tenant/data-view pair and includes it in tenant-scoped Discover data-view lookups, so users can see both namespace-wide views like `team10-*` and concrete views like `team10-demo-*`.
+After the first successful ingest for a concrete family, the gateway creates the concrete data view as a real Dashboards saved object, such as `team10-demo-*` inside the `team10` tenant, and caches that it has already checked that tenant/data-view pair.
 
 One important distinction:
 
@@ -400,7 +400,8 @@ Current defaults in the code:
 - TLS verification stays enabled by default; set `OPENSEARCH_SKIP_TLS_VERIFY=true` only for local self-signed clusters
 
 Note that per-index data views are created in tenants named after the owning namespace, so `DASHBOARDS_TENANT` is not used for those auto-created views. It remains available as the default tenant value for generic Dashboards requests.
-For logged-in users, the gateway redirects the initial Dashboards request to the first sorted namespace, such as `team1` for `team1`, `team10`, and `team2`, using the `security_tenant` URL parameter. After that, OpenSearch Dashboards owns tenant selection; the gateway does not force or remember a selected tenant.
+For logged-in users, the gateway redirects to Dashboards without selecting a tenant. OpenSearch Dashboards owns tenant selection, including switching between custom tenants.
+The gateway does not rewrite proxied Dashboards responses. It only uses the Dashboards saved-object API for gateway-managed data-view creation, and concrete ingest data views do not replace an existing tenant default.
 
 ## Route Summary
 

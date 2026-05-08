@@ -4,12 +4,10 @@ import (
 	"context"
 	cryptorand "crypto/rand"
 	"crypto/tls"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -497,6 +495,71 @@ func TestTenantAndDashboardsClientCoverage(t *testing.T) {
 		}
 	})
 
+	t.Run("set dashboards default index if missing skips existing default", func(t *testing.T) {
+		var calls []string
+		dashboards := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, r.Method+" "+r.URL.RequestURI())
+			if r.Method != http.MethodGet || r.URL.RequestURI() != "/dashboards/api/opensearch-dashboards/settings/defaultIndex" {
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.RequestURI())
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"settings":{"defaultIndex":{"userValue":"gateway-index-pattern-team1"}}}`)
+		}))
+		defer dashboards.Close()
+
+		client := newClient(Config{
+			DashboardsURL:      dashboards.URL,
+			DashboardsUsername: "admin",
+			DashboardsPassword: "secret",
+			HTTPClient:         dashboards.Client(),
+		})
+		if err := client.SetDashboardsDefaultIndexIfMissing(context.Background(), "team1", buildDataViewID("team1-demo")); err != nil {
+			t.Fatalf("SetDashboardsDefaultIndexIfMissing returned error: %v", err)
+		}
+		if !reflect.DeepEqual(calls, []string{"GET /dashboards/api/opensearch-dashboards/settings/defaultIndex"}) {
+			t.Fatalf("unexpected default-index calls: %#v", calls)
+		}
+	})
+
+	t.Run("set dashboards default index if missing writes empty default", func(t *testing.T) {
+		var calls []string
+		var body map[string]any
+		dashboards := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, r.Method+" "+r.URL.RequestURI())
+			switch r.Method + " " + r.URL.RequestURI() {
+			case "GET /dashboards/api/opensearch-dashboards/settings/defaultIndex":
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"settings":{"defaultIndex":{}}}`)
+			case "POST /dashboards/api/opensearch-dashboards/settings/defaultIndex":
+				body = decodeRequestBody(t, r)
+				w.WriteHeader(http.StatusOK)
+				_, _ = io.WriteString(w, `{}`)
+			default:
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.RequestURI())
+			}
+		}))
+		defer dashboards.Close()
+
+		client := newClient(Config{
+			DashboardsURL:      dashboards.URL,
+			DashboardsUsername: "admin",
+			DashboardsPassword: "secret",
+			HTTPClient:         dashboards.Client(),
+		})
+		if err := client.SetDashboardsDefaultIndexIfMissing(context.Background(), "team1", buildDataViewID("team1-demo")); err != nil {
+			t.Fatalf("SetDashboardsDefaultIndexIfMissing returned error: %v", err)
+		}
+		if !reflect.DeepEqual(calls, []string{
+			"GET /dashboards/api/opensearch-dashboards/settings/defaultIndex",
+			"POST /dashboards/api/opensearch-dashboards/settings/defaultIndex",
+		}) {
+			t.Fatalf("unexpected default-index calls: %#v", calls)
+		}
+		if got := body["value"]; got != buildDataViewID("team1-demo") {
+			t.Fatalf("unexpected default-index body: %#v", body)
+		}
+	})
+
 	t.Run("do dashboards json uses default tenant", func(t *testing.T) {
 		var sawTenant string
 		var sawAuth string
@@ -590,70 +653,7 @@ func TestClientHelperCoverage(t *testing.T) {
 	})
 }
 
-func TestDashboardsResponseAndHelperCoverage(t *testing.T) {
-	gateway := newGateway(newClient(Config{}), nil)
-
-	t.Run("modify dashboards response invalid json is preserved", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/dashboards/api/saved_objects/_find?type=index-pattern", nil)
-		req.Header.Set("securitytenant", "team1")
-		resp := &http.Response{
-			StatusCode: http.StatusOK,
-			Header:     make(http.Header),
-			Body:       io.NopCloser(strings.NewReader("not-json")),
-			Request:    req,
-		}
-
-		if err := gateway.modifyDashboardsResponse(resp, sessionData{Namespaces: []string{"team1"}}); err != nil {
-			t.Fatalf("modifyDashboardsResponse returned error: %v", err)
-		}
-		body, _ := io.ReadAll(resp.Body)
-		if string(body) != "not-json" {
-			t.Fatalf("expected original body to be preserved, got %q", string(body))
-		}
-	})
-
-	t.Run("modify dashboards response page greater than one synthesizes empty page", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/dashboards/api/saved_objects/_find?type=index-pattern&search=*team1*", nil)
-		req.Header.Set("securitytenant", "team1")
-		resp := &http.Response{
-			StatusCode: http.StatusOK,
-			Header:     make(http.Header),
-			Body:       io.NopCloser(strings.NewReader(`{"page":2,"per_page":10000,"total":0,"saved_objects":[]}`)),
-			Request:    req,
-		}
-
-		if err := gateway.modifyDashboardsResponse(resp, sessionData{Namespaces: []string{"team1"}}); err != nil {
-			t.Fatalf("modifyDashboardsResponse returned error: %v", err)
-		}
-
-		var payload dashboardsFindResponse
-		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-			t.Fatalf("decode modified response: %v", err)
-		}
-		if payload.Total != 1 || len(payload.SavedObjects) != 0 {
-			t.Fatalf("expected synthesized empty page, got %#v", payload)
-		}
-	})
-
-	t.Run("modify dashboards response ignores unauthorized tenant", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/dashboards/api/saved_objects/_find?type=index-pattern", nil)
-		req.Header.Set("securitytenant", "team1")
-		resp := &http.Response{
-			StatusCode: http.StatusOK,
-			Header:     make(http.Header),
-			Body:       io.NopCloser(strings.NewReader(`{"page":1,"per_page":10000,"total":0,"saved_objects":[]}`)),
-			Request:    req,
-		}
-
-		if err := gateway.modifyDashboardsResponse(resp, sessionData{Namespaces: []string{"team2"}}); err != nil {
-			t.Fatalf("modifyDashboardsResponse returned error: %v", err)
-		}
-		body, _ := io.ReadAll(resp.Body)
-		if !strings.Contains(string(body), `"total":0`) {
-			t.Fatalf("expected body to remain unchanged, got %q", string(body))
-		}
-	})
-
+func TestDashboardsHelperCoverage(t *testing.T) {
 	t.Run("dashboards helper functions", func(t *testing.T) {
 		if got := dashboardsAPIPath("/dashboards"); got != "/dashboards" {
 			t.Fatalf("unexpected dashboards path: %q", got)
@@ -663,31 +663,6 @@ func TestDashboardsResponseAndHelperCoverage(t *testing.T) {
 		}
 		if got := dashboardsAPIPath("api/test"); got != "/dashboards/api/test" {
 			t.Fatalf("unexpected dashboards path: %q", got)
-		}
-
-		if isDashboardsIndexPatternFindRequest(nil) {
-			t.Fatal("nil request should not match index-pattern _find")
-		}
-		req := httptest.NewRequest(http.MethodGet, "/dashboards/api/saved_objects/_find?type=search", nil)
-		if isDashboardsIndexPatternFindRequest(req) {
-			t.Fatal("non-index-pattern _find should not match")
-		}
-		req = httptest.NewRequest(http.MethodGet, "/dashboards/api/saved_objects/_find?type=index-pattern", nil)
-		if !isDashboardsIndexPatternFindRequest(req) {
-			t.Fatal("index-pattern _find should match")
-		}
-
-		if !matchesIndexPatternFindQuery(url.Values{}, "team1") {
-			t.Fatal("empty search should match")
-		}
-		if !matchesIndexPatternFindQuery(url.Values{"search": []string{"*team1*"}}, "team1") {
-			t.Fatal("tenant search should match")
-		}
-		if !matchesIndexPatternFindQuery(url.Values{"search": []string{"*gateway-index-pattern-team1*"}}, "team1") {
-			t.Fatal("data-view id search should match")
-		}
-		if matchesIndexPatternFindQuery(url.Values{"search": []string{"*orders*"}}, "team1") {
-			t.Fatal("unrelated search should not match")
 		}
 
 		if !sessionHasNamespace(sessionData{Namespaces: []string{" team1 ", "team2"}}, "team1") {

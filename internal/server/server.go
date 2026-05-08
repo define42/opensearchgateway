@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"mime"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -139,7 +138,7 @@ func (g *Gateway) handleLogin(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		if _, sessionData, ok := g.currentSession(r); ok && sessionData.ExpiresAt.After(time.Now()) {
-			http.Redirect(w, r, dashboardsLandingPath(sessionData.Namespaces), http.StatusSeeOther)
+			http.Redirect(w, r, dashboardsLandingPath(), http.StatusSeeOther)
 			return
 		}
 		g.RenderLoginPage(w, http.StatusOK, LoginPageData{})
@@ -273,7 +272,7 @@ func (g *Gateway) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	g.setSessionCookie(w, r, token, expiresAt)
-	http.Redirect(w, r, dashboardsLandingPath(namespaces), http.StatusSeeOther)
+	http.Redirect(w, r, dashboardsLandingPath(), http.StatusSeeOther)
 }
 
 func (g *Gateway) handleIngest(w http.ResponseWriter, r *http.Request) {
@@ -530,13 +529,8 @@ func SessionHasNamespace(data session.Data, tenantName string) bool {
 	return false
 }
 
-func dashboardsLandingPath(namespaces []string) string {
-	for _, namespace := range namespaces {
-		if trimmed := strings.TrimSpace(namespace); trimmed != "" {
-			return "/dashboards/app/home?security_tenant=" + url.QueryEscape(trimmed)
-		}
-	}
-	return "/dashboards/"
+func dashboardsLandingPath() string {
+	return "/dashboards/app/home"
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {
