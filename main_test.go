@@ -516,7 +516,7 @@ func TestGatewayAuthenticatedLoginRedirectsToDashboards(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/login", nil)
-	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token, Expires: expiresAt})
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: mustEncodeSessionCookieValue(t, gateway, token), Expires: expiresAt})
 
 	gateway.Handler().ServeHTTP(recorder, request)
 
@@ -890,7 +890,7 @@ func TestGatewayDashboardsProxyForwardsSessionBasicAuth(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/dashboards/app/home?foo=bar", nil)
-	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token, Expires: expiresAt})
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: mustEncodeSessionCookieValue(t, gateway, token), Expires: expiresAt})
 
 	gateway.Handler().ServeHTTP(recorder, request)
 
@@ -939,7 +939,7 @@ func TestGatewayDashboardsProxyDoesNotAutoSelectTenantForMultiNamespaceSession(t
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/dashboards/app/home", nil)
-	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token, Expires: expiresAt})
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: mustEncodeSessionCookieValue(t, gateway, token), Expires: expiresAt})
 
 	gateway.Handler().ServeHTTP(recorder, request)
 
@@ -983,7 +983,7 @@ func TestGatewayDashboardsProxySynthesizesTenantIndexPatternFindResults(t *testi
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/dashboards/api/saved_objects/_find?fields=title&per_page=10000&type=index-pattern", nil)
-	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token, Expires: expiresAt})
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: mustEncodeSessionCookieValue(t, gateway, token), Expires: expiresAt})
 
 	gateway.Handler().ServeHTTP(recorder, request)
 
@@ -1033,7 +1033,7 @@ func TestGatewayDashboardsProxyLeavesNonEmptyIndexPatternFindResultsUntouched(t 
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/dashboards/api/saved_objects/_find?fields=title&per_page=10000&type=index-pattern", nil)
-	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token, Expires: expiresAt})
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: mustEncodeSessionCookieValue(t, gateway, token), Expires: expiresAt})
 
 	gateway.Handler().ServeHTTP(recorder, request)
 
@@ -1069,7 +1069,7 @@ func TestGatewayLogoutClearsSession(t *testing.T) {
 
 	logoutRecorder := httptest.NewRecorder()
 	logoutRequest := httptest.NewRequest(http.MethodPost, "/logout", nil)
-	logoutRequest.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token, Expires: expiresAt})
+	logoutRequest.AddCookie(&http.Cookie{Name: sessionCookieName, Value: mustEncodeSessionCookieValue(t, gateway, token), Expires: expiresAt})
 
 	gateway.Handler().ServeHTTP(logoutRecorder, logoutRequest)
 
@@ -1082,7 +1082,7 @@ func TestGatewayLogoutClearsSession(t *testing.T) {
 
 	dashboardRecorder := httptest.NewRecorder()
 	dashboardRequest := httptest.NewRequest(http.MethodGet, "/dashboards/app/home", nil)
-	dashboardRequest.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token, Expires: expiresAt})
+	dashboardRequest.AddCookie(&http.Cookie{Name: sessionCookieName, Value: mustEncodeSessionCookieValue(t, gateway, token), Expires: expiresAt})
 
 	gateway.Handler().ServeHTTP(dashboardRecorder, dashboardRequest)
 
@@ -1246,7 +1246,7 @@ func TestGatewayIngestUsesAuthenticatedSessionAccess(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/ingest/team10", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
 	request.Header.Set("Content-Type", "application/json")
-	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token, Expires: expiresAt})
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: mustEncodeSessionCookieValue(t, gateway, token), Expires: expiresAt})
 
 	gateway.Handler().ServeHTTP(recorder, request)
 

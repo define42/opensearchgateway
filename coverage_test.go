@@ -226,7 +226,7 @@ func TestGatewayDashboardsCoverage(t *testing.T) {
 
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodGet, "/dashboards", nil)
-		request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token, Expires: expiresAt})
+		request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: mustEncodeSessionCookieValue(t, gateway, token), Expires: expiresAt})
 		gateway.Handler().ServeHTTP(recorder, request)
 
 		if recorder.Code != http.StatusBadGateway {
