@@ -664,7 +664,6 @@ func TestDashboardsHelperCoverage(t *testing.T) {
 		if got := dashboardsAPIPath("api/test"); got != "/dashboards/api/test" {
 			t.Fatalf("unexpected dashboards path: %q", got)
 		}
-
 	})
 }
 
@@ -682,7 +681,6 @@ func TestDecodeAndSessionHelpersCoverage(t *testing.T) {
 		if _, ok := store.Touch("missing"); ok {
 			t.Fatal("expected missing session touch to fail")
 		}
-
 	})
 
 	t.Run("random token success", func(t *testing.T) {

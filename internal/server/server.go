@@ -333,7 +333,7 @@ func (g *Gateway) RenderLoginPage(w http.ResponseWriter, status int, data LoginP
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
-	if err := loginTemplate().Execute(w, data); err != nil {
+	if err := loginPageTemplate.Execute(w, data); err != nil {
 		http.Error(w, "failed to render login page", http.StatusInternalServerError)
 	}
 }
