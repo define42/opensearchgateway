@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"sync"
+	"testing"
 
 	authzpkg "github.com/define42/opensearchgateway/internal/authz"
 	appconfig "github.com/define42/opensearchgateway/internal/config"
@@ -267,11 +268,7 @@ func encodeSessionCookieValue(g *Gateway, token string) (string, error) {
 
 // mustEncodeSessionCookieValue is the test-friendly wrapper around
 // encodeSessionCookieValue that fails the test on encoding errors.
-func mustEncodeSessionCookieValue(tb interface {
-	Helper()
-	Fatalf(string, ...any)
-}, g *Gateway, token string,
-) string {
+func mustEncodeSessionCookieValue(tb testing.TB, g *Gateway, token string) string {
 	tb.Helper()
 	encoded, err := encodeSessionCookieValue(g, token)
 	if err != nil {
