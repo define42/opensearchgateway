@@ -127,6 +127,9 @@ func AccessFromGroups(username string, groups []string, prefix string) ([]authz.
 		if !ok {
 			continue
 		}
+		if !authz.ValidNamespace(ns) {
+			continue
+		}
 
 		access = append(access, authz.Access{
 			Group:         groupName,

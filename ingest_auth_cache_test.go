@@ -218,6 +218,84 @@ func TestGatewayIngestBasicAuthUsesLDAPCache(t *testing.T) {
 	}
 }
 
+func TestIngestAuthCacheForgetUserEvictsEntries(t *testing.T) {
+	t.Parallel()
+
+	cache := newIngestAuthCache()
+
+	resolve := func(username, password, namespace string) {
+		key := ingestAuthCacheKey(username, password)
+		if _, _, _, err := cache.Resolve(key, func() (string, []Access, error) {
+			return username, []Access{{Group: namespace + "_rw", Namespace: namespace}}, nil
+		}); err != nil {
+			t.Fatalf("Resolve(%q): %v", username, err)
+		}
+	}
+
+	resolve("alice", "p1", "team10")
+	resolve("alice", "p2", "team10")
+	resolve("bob", "p1", "team20")
+
+	if got := cache.Stats().Entries; got != 3 {
+		t.Fatalf("expected 3 entries before forget, got %d", got)
+	}
+
+	cache.ForgetUser("alice")
+
+	stats := cache.Stats()
+	if stats.Entries != 1 {
+		t.Fatalf("expected 1 entry after forgetting alice, got %d", stats.Entries)
+	}
+
+	_, _, cached, err := cache.Resolve(ingestAuthCacheKey("bob", "p1"), func() (string, []Access, error) {
+		t.Fatal("bob's entry should still be cached")
+		return "", nil, nil
+	})
+	if err != nil || !cached {
+		t.Fatalf("bob's entry was evicted (cached=%v err=%v)", cached, err)
+	}
+}
+
+func TestGatewayLogoutEvictsIngestAuthCache(t *testing.T) {
+	t.Parallel()
+
+	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer openSearch.Close()
+
+	gateway := newGateway(newClient(testConfig(openSearch)), func(username, password string) (*User, []Access, error) {
+		return &User{Name: username}, []Access{{Group: "team10_rw", Namespace: "team10"}}, nil
+	})
+
+	if _, _, _, err := gateway.ingestAuthCache.Resolve(ingestAuthCacheKey("ingestuser", "dogood"), func() (string, []Access, error) {
+		return "ingestuser", []Access{{Group: "team10_rw", Namespace: "team10"}}, nil
+	}); err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+
+	token, expiresAt, err := gateway.sessions.Create(sessionData{
+		User:       &User{Name: "ingestuser"},
+		AuthHeader: buildBasicAuthorization("ingestuser", "dogood"),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/logout", nil)
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: mustEncodeSessionCookieValue(t, gateway, token), Expires: expiresAt})
+
+	gateway.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("expected logout redirect, got %d", recorder.Code)
+	}
+	if got := gateway.ingestAuthCache.Stats().Entries; got != 0 {
+		t.Fatalf("expected ingest auth cache entries to be cleared after logout, got %d", got)
+	}
+}
+
 func TestGatewayIngestBasicAuthDoesNotCacheAuthenticationErrors(t *testing.T) {
 	t.Parallel()
 

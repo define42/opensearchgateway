@@ -5,15 +5,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/define42/opensearchgateway/internal/authz"
 	"golang.org/x/crypto/bcrypt"
 )
-
-var indexNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
 // ProvisionLoginUser ensures roles, tenants, data views, and the internal user.
 func (c *Client) ProvisionLoginUser(ctx context.Context, username, password string, access []authz.Access) ([]string, error) {
@@ -29,7 +26,7 @@ func (c *Client) ProvisionLoginUser(ctx context.Context, username, password stri
 	roleNames := make([]string, 0, len(effective)+1)
 	namespaces := make([]string, 0, len(effective))
 	for _, item := range effective {
-		if !indexNamePattern.MatchString(item.Namespace) {
+		if !authz.ValidNamespace(item.Namespace) {
 			return nil, fmt.Errorf("LDAP namespace %q cannot be mapped to OpenSearch resources", item.Namespace)
 		}
 

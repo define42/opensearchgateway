@@ -127,6 +127,23 @@ func TestAccessFromGroupsFiltersPrefixAndSelectsMostPermissive(t *testing.T) {
 	}
 }
 
+func TestAccessFromGroupsDropsHyphenedNamespace(t *testing.T) {
+	t.Parallel()
+
+	groups := []string{
+		"cn=team10_rw,ou=groups,dc=glauth,dc=com",
+		"cn=team10-special_rw,ou=groups,dc=glauth,dc=com",
+	}
+
+	access, user := accessFromGroups("johndoe", groups, "team")
+	if user == nil || user.Namespace != "team10" {
+		t.Fatalf("expected selected user in team10, got %+v", user)
+	}
+	if len(access) != 1 || access[0].Namespace != "team10" {
+		t.Fatalf("hyphened namespace must be dropped; got access=%+v", access)
+	}
+}
+
 func TestDialLDAPStartTLSFailure(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

@@ -161,8 +161,11 @@ func (g *Gateway) handleLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if token, _, ok := g.currentSession(r); ok {
+	if token, sessionData, ok := g.currentSession(r); ok {
 		g.Sessions.Delete(token)
+		if sessionData.User != nil {
+			g.IngestAuthCache.ForgetUser(sessionData.User.Name)
+		}
 	} else if token, ok := g.readSessionCookie(r); ok {
 		g.Sessions.Delete(token)
 	}

@@ -2,9 +2,20 @@
 package authz
 
 import (
+	"regexp"
 	"sort"
 	"strings"
 )
+
+// namespacePattern restricts namespaces to characters that cannot collide
+// with the "<namespace>-<index>" ingest path separator. A "-" inside the
+// namespace would let multiple namespaces prefix-match the same index name.
+var namespacePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_]*$`)
+
+// ValidNamespace reports whether ns is allowed as a gateway namespace.
+func ValidNamespace(ns string) bool {
+	return namespacePattern.MatchString(ns)
+}
 
 // User describes the most permissive namespace access selected for a person.
 type User struct {

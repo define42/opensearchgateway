@@ -146,6 +146,25 @@ func (c *AuthCache) Resolve(key string, fetch func() (string, []authz.Access, er
 	return username, authz.CloneAccess(access), false, nil
 }
 
+// ForgetUser drops every cached entry whose stored username equals username.
+// It is called on logout so a session-terminated user cannot continue ingesting
+// via cached Basic-auth credentials. In-flight lookups are not cancelled, but
+// their results are not stored if the entry was forgotten in the meantime.
+func (c *AuthCache) ForgetUser(username string) {
+	if c == nil || username == "" {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for key, entry := range c.entries {
+		if entry.Username == username {
+			delete(c.entries, key)
+		}
+	}
+}
+
 // Stats returns the current cache counters and entry count.
 func (c *AuthCache) Stats() AuthCacheStats {
 	if c == nil {

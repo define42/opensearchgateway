@@ -40,13 +40,13 @@ func TestResolveIngestWriteNamespace(t *testing.T) {
 			indexName: "team10-hello",
 		},
 		{
-			name: "longest matching namespace wins",
+			name: "non-overlapping namespaces resolve only their own indices",
 			access: []Access{
+				{Group: "team_rw", Namespace: "team"},
 				{Group: "team10_rw", Namespace: "team10"},
-				{Group: "team10-hello_rw", Namespace: "team10-hello"},
 			},
-			indexName: "team10-hello-prod",
-			want:      "team10-hello",
+			indexName: "team10-foo",
+			want:      "team10",
 			wantOK:    true,
 		},
 	}
