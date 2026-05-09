@@ -39,8 +39,9 @@ func (c *Client) EnsureIndexTemplate(ctx context.Context, templateName string) e
 		"priority":       100,
 		"template": map[string]any{
 			"settings": map[string]any{
-				"index.number_of_shards":   c.Config.Shards,
-				"index.number_of_replicas": c.Config.Replicas,
+				"index.number_of_shards":                   c.Config.Shards,
+				"index.number_of_replicas":                 c.Config.Replicas,
+				"plugins.index_state_management.policy_id": DefaultISMPolicyID,
 			},
 			"mappings": map[string]any{
 				"properties": map[string]any{

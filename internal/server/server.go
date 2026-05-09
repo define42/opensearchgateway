@@ -94,7 +94,7 @@ func New(client *opensearch.Client, authenticate AuthenticateFunc) *Gateway {
 func newSecureCookie() *securecookie.SecureCookie {
 	hashKey := securecookie.GenerateRandomKey(64)
 	blockKey := securecookie.GenerateRandomKey(32)
-	return securecookie.New(hashKey, blockKey)
+	return securecookie.New(hashKey, blockKey).MaxAge(sessionCookieMaxAgeSeconds)
 }
 
 // EncodeSessionCookieValue encodes a session into a securecookie value.
@@ -489,8 +489,9 @@ func (g *Gateway) setSessionCookie(w http.ResponseWriter, r *http.Request, s Ses
 	})
 }
 
-// sessionCookieMaxAgeSeconds matches gorilla/securecookie's default MaxAge
-// (24h) so the browser-side and server-side expiry agree.
+// sessionCookieMaxAgeSeconds is the shared browser-side and server-side
+// session lifetime, so the browser drops the cookie when the gateway stops
+// accepting it.
 const sessionCookieMaxAgeSeconds = 86400
 
 func (g *Gateway) clearSessionCookie(w http.ResponseWriter, r *http.Request) {

@@ -158,6 +158,7 @@ func TestIngestAuthCacheDeduplicatesConcurrentMisses(t *testing.T) {
 	}
 }
 
+//nolint:cyclop,funlen // Cache integration test keeps first-hit repair and second-hit cache behavior together.
 func TestGatewayIngestBasicAuthUsesLDAPCache(t *testing.T) {
 	t.Parallel()
 
@@ -168,6 +169,12 @@ func TestGatewayIngestBasicAuthUsesLDAPCache(t *testing.T) {
 		switch r.Method + " " + r.URL.Path {
 		case "HEAD /_alias/team10-hello-20241230-rollover":
 			w.WriteHeader(http.StatusOK)
+		case "GET /_alias/team10-hello-20241230-rollover":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"team10-hello-20241230-rollover-000001":{"aliases":{"team10-hello-20241230-rollover":{"is_write_index":true}}}}`)
+		case "POST /_plugins/_ism/add/team10-hello-20241230-rollover-000001":
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"updated_indices":1,"failures":false,"failed_indices":[]}`)
 		case "POST /team10-hello-20241230-rollover/_doc":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"result":"created","_id":"cached-doc"}`)
@@ -210,8 +217,8 @@ func TestGatewayIngestBasicAuthUsesLDAPCache(t *testing.T) {
 	if got := authCalls.Load(); got != 1 {
 		t.Fatalf("expected one LDAP auth call, got %d", got)
 	}
-	if len(calls) != 4 {
-		t.Fatalf("expected two alias checks and two doc writes, got %#v", calls)
+	if len(calls) != 6 {
+		t.Fatalf("expected first write to repair policy and both writes to index, got %#v", calls)
 	}
 
 	stats := gateway.ingestAuthCache.Stats()

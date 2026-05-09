@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/define42/opensearchgateway/internal/ingest"
@@ -19,6 +20,9 @@ func (c *Client) EnsureWriteAlias(ctx context.Context, alias string) (bool, erro
 		return false, fmt.Errorf("check alias %q: %w", alias, err)
 	}
 	if exists {
+		if err := c.EnsureWriteAliasPolicy(ctx, alias); err != nil {
+			return false, err
+		}
 		return false, nil
 	}
 
@@ -27,10 +31,7 @@ func (c *Client) EnsureWriteAlias(ctx context.Context, alias string) (bool, erro
 		return c.handleBootstrapDateStreamError(ctx, alias, err)
 	}
 
-	if err := c.AttachISMPolicy(ctx, firstIndex, DefaultISMPolicyID); err != nil {
-		return false, fmt.Errorf("attach ISM policy to %q: %w", firstIndex, err)
-	}
-
+	c.EnsuredAliasPolicies.Store(alias, true)
 	return true, nil
 }
 
@@ -44,6 +45,9 @@ func (c *Client) handleBootstrapDateStreamError(ctx context.Context, alias strin
 		return false, fmt.Errorf("re-check alias %q after bootstrap conflict: %w", alias, recheckErr)
 	}
 	if exists {
+		if err := c.EnsureWriteAliasPolicy(ctx, alias); err != nil {
+			return false, err
+		}
 		return false, nil
 	}
 	return false, fmt.Errorf("bootstrap %q: %w", alias, err)
@@ -70,10 +74,70 @@ func (c *Client) BootstrapDateStream(ctx context.Context, indexName, alias strin
 		},
 		"settings": map[string]any{
 			"plugins.index_state_management.rollover_alias": alias,
+			"plugins.index_state_management.policy_id":      DefaultISMPolicyID,
 		},
 	}
 
 	return c.DoJSON(ctx, http.MethodPut, "/"+url.PathEscape(indexName), body, nil, []int{http.StatusOK, http.StatusCreated})
+}
+
+// EnsureWriteAliasPolicy repairs policy attachment for an already-existing
+// write alias. The ISM add endpoint is idempotent for indices that already have
+// a policy, and this only targets the concrete write backing index rather than
+// a broad wildcard.
+func (c *Client) EnsureWriteAliasPolicy(ctx context.Context, alias string) error {
+	if _, ok := c.EnsuredAliasPolicies.Load(alias); ok {
+		return nil
+	}
+
+	writeIndices, err := c.WriteIndicesForAlias(ctx, alias)
+	if err != nil {
+		return fmt.Errorf("resolve write indices for alias %q: %w", alias, err)
+	}
+	for _, indexName := range writeIndices {
+		if err := c.AttachISMPolicy(ctx, indexName, DefaultISMPolicyID); err != nil {
+			return fmt.Errorf("attach ISM policy to %q: %w", indexName, err)
+		}
+	}
+
+	c.EnsuredAliasPolicies.Store(alias, true)
+	return nil
+}
+
+// WriteIndicesForAlias returns the concrete write backing indices for alias.
+func (c *Client) WriteIndicesForAlias(ctx context.Context, alias string) ([]string, error) {
+	var response AliasResponse
+	path := "/_alias/" + url.PathEscape(alias)
+	if err := c.DoJSON(ctx, http.MethodGet, path, nil, &response, []int{http.StatusOK}); err != nil {
+		return nil, err
+	}
+
+	backingIndices := make([]string, 0, len(response))
+	writeIndices := make([]string, 0, 1)
+	for indexName, indexInfo := range response {
+		aliasInfo, ok := indexInfo.Aliases[alias]
+		if !ok {
+			continue
+		}
+
+		backingIndices = append(backingIndices, indexName)
+		if aliasInfo.IsWriteIndex != nil && *aliasInfo.IsWriteIndex {
+			writeIndices = append(writeIndices, indexName)
+		}
+	}
+
+	sort.Strings(backingIndices)
+	sort.Strings(writeIndices)
+	if len(writeIndices) > 0 {
+		return writeIndices, nil
+	}
+	if len(backingIndices) == 1 {
+		return backingIndices, nil
+	}
+	if len(backingIndices) == 0 {
+		return nil, fmt.Errorf("alias %q has no backing indices", alias)
+	}
+	return nil, fmt.Errorf("alias %q has no write index", alias)
 }
 
 // AttachISMPolicy attaches policyID to indexName.

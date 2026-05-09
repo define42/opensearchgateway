@@ -14,6 +14,7 @@ import (
 	"testing"
 )
 
+//nolint:gocognit,funlen // Bootstrap test keeps policy/template request assertions together.
 func TestRunBootstrapsBeforeServe(t *testing.T) {
 	t.Parallel()
 
@@ -50,6 +51,11 @@ func TestRunBootstrapsBeforeServe(t *testing.T) {
 		}
 
 		template := nestedMap(t, templateBody["template"])
+		settings := nestedMap(t, template["settings"])
+		if got := settings["plugins.index_state_management.policy_id"]; got != ismPolicyID {
+			t.Fatalf("unexpected template policy id: %#v", got)
+		}
+
 		mappings := nestedMap(t, template["mappings"])
 		properties := nestedMap(t, mappings["properties"])
 		eventTime := nestedMap(t, properties["event_time"])
@@ -342,6 +348,14 @@ func TestGatewayIngestEnsuresDashboardDataView(t *testing.T) {
 		case "HEAD /_alias/orders-demo-20241230-rollover":
 			appendCall("alias-head")
 			w.WriteHeader(http.StatusOK)
+		case "GET /_alias/orders-demo-20241230-rollover":
+			appendCall("alias-get")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"orders-demo-20241230-rollover-000001":{"aliases":{"orders-demo-20241230-rollover":{"is_write_index":true}}}}`)
+		case "POST /_plugins/_ism/add/orders-demo-20241230-rollover-000001":
+			appendCall("policy-attach")
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"updated_indices":1,"failures":false,"failed_indices":[]}`)
 		case "POST /orders-demo-20241230-rollover/_doc":
 			appendCall("doc-post")
 			w.Header().Set("Content-Type", "application/json")
@@ -386,6 +400,8 @@ func TestGatewayIngestEnsuresDashboardDataView(t *testing.T) {
 		"data-view-post",
 		"default-index-get",
 		"alias-head",
+		"alias-get",
+		"policy-attach",
 		"doc-post",
 	}) {
 		t.Fatalf("unexpected request order: %#v", calls)
@@ -1362,6 +1378,12 @@ func TestGatewayIngestUsesAuthenticatedSessionAccess(t *testing.T) {
 		switch r.Method + " " + r.URL.Path {
 		case "HEAD /_alias/team10-hello-20241230-rollover":
 			w.WriteHeader(http.StatusOK)
+		case "GET /_alias/team10-hello-20241230-rollover":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"team10-hello-20241230-rollover-000001":{"aliases":{"team10-hello-20241230-rollover":{"is_write_index":true}}}}`)
+		case "POST /_plugins/_ism/add/team10-hello-20241230-rollover-000001":
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"updated_indices":1,"failures":false,"failed_indices":[]}`)
 		case "POST /team10-hello-20241230-rollover/_doc":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"result":"created","_id":"session-doc"}`)
@@ -1393,6 +1415,8 @@ func TestGatewayIngestUsesAuthenticatedSessionAccess(t *testing.T) {
 	}
 	if !reflect.DeepEqual(calls, []string{
 		"HEAD /_alias/team10-hello-20241230-rollover",
+		"GET /_alias/team10-hello-20241230-rollover",
+		"POST /_plugins/_ism/add/team10-hello-20241230-rollover-000001",
 		"POST /team10-hello-20241230-rollover/_doc",
 	}) {
 		t.Fatalf("unexpected OpenSearch sequence: %#v", calls)
@@ -1405,7 +1429,6 @@ func TestGatewayIngestBootstrapsAndIndexes(t *testing.T) {
 
 	var calls []string
 	var createBody map[string]any
-	var attachBody map[string]any
 	var indexBody map[string]any
 
 	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1416,11 +1439,6 @@ func TestGatewayIngestBootstrapsAndIndexes(t *testing.T) {
 		case "PUT /orders-demo-20241230-rollover-000001":
 			calls = append(calls, "create")
 			createBody = decodeRequestBody(t, r)
-			w.WriteHeader(http.StatusCreated)
-			_, _ = io.WriteString(w, `{}`)
-		case "POST /_plugins/_ism/add/orders-demo-20241230-rollover-000001":
-			calls = append(calls, "attach")
-			attachBody = decodeRequestBody(t, r)
 			w.WriteHeader(http.StatusCreated)
 			_, _ = io.WriteString(w, `{}`)
 		case "POST /orders-demo-20241230-rollover/_doc":
@@ -1444,7 +1462,7 @@ func TestGatewayIngestBootstrapsAndIndexes(t *testing.T) {
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("expected status 201, got %d: %s", recorder.Code, recorder.Body.String())
 	}
-	if !reflect.DeepEqual(calls, []string{"head", "create", "attach", "index"}) {
+	if !reflect.DeepEqual(calls, []string{"head", "create", "index"}) {
 		t.Fatalf("unexpected OpenSearch sequence: %#v", calls)
 	}
 
@@ -1458,9 +1476,8 @@ func TestGatewayIngestBootstrapsAndIndexes(t *testing.T) {
 	if got := settings["plugins.index_state_management.rollover_alias"]; got != "orders-demo-20241230-rollover" {
 		t.Fatalf("unexpected rollover alias setting: %#v", got)
 	}
-
-	if got := attachBody["policy_id"]; got != ismPolicyID {
-		t.Fatalf("unexpected attached policy id: %#v", got)
+	if got := settings["plugins.index_state_management.policy_id"]; got != ismPolicyID {
+		t.Fatalf("unexpected policy setting: %#v", got)
 	}
 	if got := indexBody["event_time"]; got != "2024-12-30T10:11:12Z" {
 		t.Fatalf("unexpected normalized event_time: %#v", got)
@@ -1488,6 +1505,14 @@ func TestGatewayRepeatWriteSkipsBootstrap(t *testing.T) {
 		case "HEAD /_alias/orders-demo-20241230-rollover":
 			calls = append(calls, "head")
 			w.WriteHeader(http.StatusOK)
+		case "GET /_alias/orders-demo-20241230-rollover":
+			calls = append(calls, "alias")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"orders-demo-20241230-rollover-000001":{"aliases":{"orders-demo-20241230-rollover":{"is_write_index":true}}}}`)
+		case "POST /_plugins/_ism/add/orders-demo-20241230-rollover-000001":
+			calls = append(calls, "attach")
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"updated_indices":1,"failures":false,"failed_indices":[]}`)
 		case "POST /orders-demo-20241230-rollover/_doc":
 			calls = append(calls, "index")
 			w.Header().Set("Content-Type", "application/json")
@@ -1508,7 +1533,7 @@ func TestGatewayRepeatWriteSkipsBootstrap(t *testing.T) {
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("expected status 201, got %d: %s", recorder.Code, recorder.Body.String())
 	}
-	if !reflect.DeepEqual(calls, []string{"head", "index"}) {
+	if !reflect.DeepEqual(calls, []string{"head", "alias", "attach", "index"}) {
 		t.Fatalf("unexpected OpenSearch sequence: %#v", calls)
 	}
 
@@ -1521,6 +1546,49 @@ func TestGatewayRepeatWriteSkipsBootstrap(t *testing.T) {
 	}
 	if response.WriteAlias != "orders-demo-20241230-rollover" {
 		t.Fatalf("unexpected alias: %#v", response)
+	}
+}
+
+func TestEnsureWriteAliasRepairsExistingAliasPolicy(t *testing.T) {
+	t.Parallel()
+
+	var calls []string
+	var attachBody map[string]any
+	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+
+		switch r.Method + " " + r.URL.Path {
+		case "HEAD /_alias/orders-demo-20241230-rollover":
+			w.WriteHeader(http.StatusOK)
+		case "GET /_alias/orders-demo-20241230-rollover":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"orders-demo-20241230-rollover-000001":{"aliases":{"orders-demo-20241230-rollover":{"is_write_index":true}}}}`)
+		case "POST /_plugins/_ism/add/orders-demo-20241230-rollover-000001":
+			attachBody = decodeRequestBody(t, r)
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"updated_indices":1,"failures":false,"failed_indices":[]}`)
+		default:
+			t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer openSearch.Close()
+
+	bootstrapped, err := newClient(testConfig(openSearch)).EnsureWriteAlias(context.Background(), "orders-demo-20241230-rollover")
+	if err != nil {
+		t.Fatalf("EnsureWriteAlias returned error: %v", err)
+	}
+	if bootstrapped {
+		t.Fatal("existing alias should not report bootstrap")
+	}
+	if !reflect.DeepEqual(calls, []string{
+		"HEAD /_alias/orders-demo-20241230-rollover",
+		"GET /_alias/orders-demo-20241230-rollover",
+		"POST /_plugins/_ism/add/orders-demo-20241230-rollover-000001",
+	}) {
+		t.Fatalf("unexpected repair calls: %#v", calls)
+	}
+	if got := attachBody["policy_id"]; got != ismPolicyID {
+		t.Fatalf("unexpected attached policy id: %#v", got)
 	}
 }
 
@@ -1615,10 +1683,14 @@ func TestGatewayOpenSearchFailuresReturnBadGateway(t *testing.T) {
 			name: "document post failure",
 			handler: sequenceHandler(t,
 				responseSpec{method: http.MethodHead, path: "/_alias/orders-demo-20241230-rollover", status: http.StatusOK},
+				responseSpec{method: http.MethodGet, path: "/_alias/orders-demo-20241230-rollover", status: http.StatusOK, body: `{"orders-demo-20241230-rollover-000001":{"aliases":{"orders-demo-20241230-rollover":{"is_write_index":true}}}}`},
+				responseSpec{method: http.MethodPost, path: "/_plugins/_ism/add/orders-demo-20241230-rollover-000001", status: http.StatusOK, body: `{"updated_indices":1,"failures":false,"failed_indices":[]}`},
 				responseSpec{method: http.MethodPost, path: "/orders-demo-20241230-rollover/_doc", status: http.StatusInternalServerError, body: `{"error":"index failed"}`},
 			),
 			wantCalls: []string{
 				"HEAD /_alias/orders-demo-20241230-rollover",
+				"GET /_alias/orders-demo-20241230-rollover",
+				"POST /_plugins/_ism/add/orders-demo-20241230-rollover-000001",
 				"POST /orders-demo-20241230-rollover/_doc",
 			},
 		},
@@ -1760,8 +1832,20 @@ func TestGatewayBootstrapConflictRetriesAliasCheck(t *testing.T) {
 			}
 			w.WriteHeader(http.StatusOK)
 		case 4:
-			if r.Method != http.MethodPost || r.URL.Path != "/orders-demo-20241230-rollover/_doc" {
+			if r.Method != http.MethodGet || r.URL.Path != "/_alias/orders-demo-20241230-rollover" {
 				t.Fatalf("unexpected fourth request: %s %s", r.Method, r.URL.Path)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"orders-demo-20241230-rollover-000001":{"aliases":{"orders-demo-20241230-rollover":{"is_write_index":true}}}}`)
+		case 5:
+			if r.Method != http.MethodPost || r.URL.Path != "/_plugins/_ism/add/orders-demo-20241230-rollover-000001" {
+				t.Fatalf("unexpected fifth request: %s %s", r.Method, r.URL.Path)
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"updated_indices":1,"failures":false,"failed_indices":[]}`)
+		case 6:
+			if r.Method != http.MethodPost || r.URL.Path != "/orders-demo-20241230-rollover/_doc" {
+				t.Fatalf("unexpected sixth request: %s %s", r.Method, r.URL.Path)
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"result":"created","_id":"after-race"}`)
@@ -1785,6 +1869,8 @@ func TestGatewayBootstrapConflictRetriesAliasCheck(t *testing.T) {
 		"HEAD /_alias/orders-demo-20241230-rollover",
 		"PUT /orders-demo-20241230-rollover-000001",
 		"HEAD /_alias/orders-demo-20241230-rollover",
+		"GET /_alias/orders-demo-20241230-rollover",
+		"POST /_plugins/_ism/add/orders-demo-20241230-rollover-000001",
 		"POST /orders-demo-20241230-rollover/_doc",
 	}) {
 		t.Fatalf("unexpected OpenSearch sequence: %#v", calls)

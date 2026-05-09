@@ -633,6 +633,14 @@ func TestDashboardsHelperCoverage(t *testing.T) {
 }
 
 func TestDecodeAndSessionHelpersCoverage(t *testing.T) {
+	t.Run("secure cookie max age matches browser cookie", func(t *testing.T) {
+		gateway := newGateway(newClient(Config{}), nil)
+		maxAge := reflect.ValueOf(gateway.SecureCookie).Elem().FieldByName("maxAge").Int()
+		if maxAge != 86400 {
+			t.Fatalf("expected securecookie server-side max age to be 86400 seconds, got %d", maxAge)
+		}
+	})
+
 	t.Run("forwarded proto handles https", func(t *testing.T) {
 		if got := forwardedProto(httptest.NewRequest(http.MethodGet, "http://example.com", nil)); got != "http" {
 			t.Fatalf("expected http proto, got %q", got)

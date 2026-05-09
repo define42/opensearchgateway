@@ -21,9 +21,10 @@ var ErrReservedInternalUser = errors.New("opensearch internal user is reserved o
 
 // Client wraps OpenSearch and Dashboards HTTP interactions for the gateway.
 type Client struct {
-	Config           config.Config
-	EnsuredTenants   sync.Map
-	EnsuredDataViews sync.Map
+	Config               config.Config
+	EnsuredTenants       sync.Map
+	EnsuredDataViews     sync.Map
+	EnsuredAliasPolicies sync.Map
 }
 
 // ResponseError reports a non-success HTTP response from an upstream API.
@@ -43,6 +44,19 @@ func (e *ResponseError) Error() string {
 type IndexDocumentResponse struct {
 	ID     string `json:"_id"`
 	Result string `json:"result"`
+}
+
+// AliasResponse captures the OpenSearch alias lookup payload by backing index.
+type AliasResponse map[string]AliasIndexInfo
+
+// AliasIndexInfo captures the aliases attached to a single backing index.
+type AliasIndexInfo struct {
+	Aliases map[string]AliasInfo `json:"aliases"`
+}
+
+// AliasInfo captures alias metadata needed to identify writable backing indices.
+type AliasInfo struct {
+	IsWriteIndex *bool `json:"is_write_index,omitempty"`
 }
 
 // DashboardsSavedObjectRequest creates or updates a Dashboards saved object.
