@@ -80,7 +80,7 @@ func (a *Authenticator) lookupEntry(conn *goldap.Conn, mail string) (*goldap.Ent
 		a.cfg.BaseDN,
 		goldap.ScopeWholeSubtree,
 		goldap.NeverDerefAliases, 1, 0, false,
-		fmt.Sprintf(a.cfg.UserFilter, mail),
+		a.userSearchFilter(mail),
 		nil,
 		nil,
 	)
@@ -93,6 +93,10 @@ func (a *Authenticator) lookupEntry(conn *goldap.Conn, mail string) (*goldap.Ent
 		return nil, fmt.Errorf("%w: %s", ErrUserNotFound, mail)
 	}
 	return sr.Entries[0], nil
+}
+
+func (a *Authenticator) userSearchFilter(mail string) string {
+	return fmt.Sprintf(a.cfg.UserFilter, goldap.EscapeFilter(mail))
 }
 
 // Dial opens an LDAP connection according to cfg.
