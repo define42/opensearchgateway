@@ -17,9 +17,21 @@ import (
 	"github.com/define42/opensearchgateway/internal/ingest"
 	ldappkg "github.com/define42/opensearchgateway/internal/ldap"
 	"github.com/define42/opensearchgateway/internal/opensearch"
-	"github.com/define42/opensearchgateway/internal/session"
 	"github.com/gorilla/securecookie"
 )
+
+// Session is the value carried inside the encrypted session cookie. It holds
+// every per-request fact the gateway needs to authorize the user and proxy
+// Dashboards, so the gateway can scale horizontally without a shared session
+// store: the cookie itself is the session. Expiry is enforced by
+// gorilla/securecookie's MaxAge (default 24h) at decode time, so no timing
+// fields are tracked here.
+type Session struct {
+	User       *authz.User
+	Access     []authz.Access
+	Namespaces []string
+	AuthHeader string
+}
 
 // SessionCookieName is the cookie that carries the gateway session token.
 const SessionCookieName = "opensearchgateway_session"
@@ -36,7 +48,6 @@ type AuthenticateFunc func(string, string) (*authz.User, []authz.Access, error)
 type Gateway struct {
 	Client          *opensearch.Client
 	Authenticate    AuthenticateFunc
-	Sessions        *session.Store
 	IngestAuthCache *ingest.AuthCache
 	SecureCookie    *securecookie.SecureCookie
 }
@@ -71,7 +82,6 @@ func New(client *opensearch.Client, authenticate AuthenticateFunc) *Gateway {
 	return &Gateway{
 		Client:          client,
 		Authenticate:    authenticate,
-		Sessions:        session.NewStore(),
 		IngestAuthCache: ingest.NewAuthCache(),
 		SecureCookie:    newSecureCookie(),
 	}
@@ -79,27 +89,30 @@ func New(client *opensearch.Client, authenticate AuthenticateFunc) *Gateway {
 
 // newSecureCookie builds a securecookie codec with freshly generated keys.
 // Keys are generated per process so cookies do not survive a restart.
+// In a multi-instance deployment behind a load balancer, replace with a
+// codec configured from a shared secret so every gateway can decode cookies
+// minted by its peers.
 func newSecureCookie() *securecookie.SecureCookie {
 	hashKey := securecookie.GenerateRandomKey(64)
 	blockKey := securecookie.GenerateRandomKey(32)
 	return securecookie.New(hashKey, blockKey)
 }
 
-// EncodeSessionCookieValue encodes the supplied session token using the
-// gateway's securecookie codec. It is exported primarily so tests can
-// produce valid session cookies.
-func (g *Gateway) EncodeSessionCookieValue(token string) (string, error) {
-	return g.SecureCookie.Encode(SessionCookieName, token)
+// EncodeSessionCookieValue encodes a session into a securecookie value.
+// Exported so tests can mint cookies without going through the login flow.
+func (g *Gateway) EncodeSessionCookieValue(s Session) (string, error) {
+	return g.SecureCookie.Encode(SessionCookieName, s)
 }
 
-// decodeSessionCookieValue decodes the supplied cookie value back into a
-// session token, or returns an error if the value is missing or invalid.
-func (g *Gateway) decodeSessionCookieValue(value string) (string, error) {
-	var token string
-	if err := g.SecureCookie.Decode(SessionCookieName, value, &token); err != nil {
-		return "", err
+// decodeSessionCookieValue decodes a cookie value back into a Session, or
+// returns an error if the value is missing, tampered with, or expired by
+// gorilla/securecookie's MaxAge.
+func (g *Gateway) decodeSessionCookieValue(value string) (Session, error) {
+	var s Session
+	if err := g.SecureCookie.Decode(SessionCookieName, value, &s); err != nil {
+		return Session{}, err
 	}
-	return token, nil
+	return s, nil
 }
 
 // Handler builds the HTTP mux for the gateway routes.
@@ -139,7 +152,7 @@ func (g *Gateway) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		if _, sessionData, ok := g.currentSession(r); ok && sessionData.ExpiresAt.After(time.Now()) {
+		if _, ok := g.currentSession(r); ok {
 			http.Redirect(w, r, dashboardsLandingPath(), http.StatusSeeOther)
 			return
 		}
@@ -163,13 +176,11 @@ func (g *Gateway) handleLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if token, sessionData, ok := g.currentSession(r); ok {
-		g.Sessions.Delete(token)
-		if sessionData.User != nil {
-			g.IngestAuthCache.ForgetUser(sessionData.User.Name)
-		}
-	} else if token, ok := g.readSessionCookie(r); ok {
-		g.Sessions.Delete(token)
+	if sessionData, ok := g.currentSession(r); ok && sessionData.User != nil {
+		// Best-effort: drop this instance's LDAP basic-auth cache for the
+		// logged-out user. With multiple gateways behind a load balancer,
+		// peers still have their own caches until those entries expire.
+		g.IngestAuthCache.ForgetUser(sessionData.User.Name)
 	}
 
 	g.clearSessionCookie(w, r)
@@ -183,21 +194,13 @@ func (g *Gateway) HandleDashboards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, sessionData, ok := g.currentSession(r)
+	sessionData, ok := g.currentSession(r)
 	if !ok {
 		g.clearSessionCookie(w, r)
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
 
-	sessionData, ok = g.Sessions.Touch(token)
-	if !ok {
-		g.clearSessionCookie(w, r)
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
-		return
-	}
-
-	g.setSessionCookie(w, r, token, sessionData.ExpiresAt)
 	if err := g.proxyDashboards(w, r, sessionData); err != nil {
 		writeErrorJSON(w, http.StatusBadGateway, fmt.Sprintf("Dashboards proxy failed: %v", err))
 	}
@@ -266,26 +269,12 @@ func (g *Gateway) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if token, ok := g.readSessionCookie(r); ok {
-		g.Sessions.Delete(token)
-	}
-
-	token, expiresAt, err := g.Sessions.Create(session.Data{
+	g.setSessionCookie(w, r, Session{
 		User:       user,
 		Access:     access,
 		Namespaces: namespaces,
 		AuthHeader: BuildBasicAuthorization(username, internalPassword),
-		CreatedAt:  time.Now(),
 	})
-	if err != nil {
-		g.RenderLoginPage(w, http.StatusBadGateway, LoginPageData{
-			Error:    "failed to create login session",
-			Username: username,
-		})
-		return
-	}
-
-	g.setSessionCookie(w, r, token, expiresAt)
 	http.Redirect(w, r, dashboardsLandingPath(), http.StatusSeeOther)
 }
 
@@ -374,7 +363,7 @@ func (g *Gateway) authorizeIngestRequest(r *http.Request, indexName string) (str
 
 func (g *Gateway) ingestAccess(r *http.Request) ([]authz.Access, error) {
 	if strings.TrimSpace(r.Header.Get("Authorization")) == "" {
-		if _, sessionData, ok := g.currentSession(r); ok {
+		if sessionData, ok := g.currentSession(r); ok {
 			return sessionData.Access, nil
 		}
 		return nil, errIngestAuthRequired
@@ -457,35 +446,34 @@ func mimeParse(mediaType string) (string, map[string]string, error) {
 	return mime.ParseMediaType(mediaType)
 }
 
-func (g *Gateway) currentSession(r *http.Request) (string, session.Data, bool) {
-	token, ok := g.readSessionCookie(r)
-	if !ok {
-		return "", session.Data{}, false
-	}
-
-	sessionData, ok := g.Sessions.Get(token)
-	if !ok {
-		return token, session.Data{}, false
-	}
-	return token, sessionData, true
+// currentSession decodes the session cookie attached to r, returning the
+// session and true if the cookie is present and well-formed. Expiry is
+// enforced inside the cookie codec (gorilla/securecookie's MaxAge), which
+// returns a decode error once the cookie is older than the configured
+// lifetime — there is no server-side store.
+func (g *Gateway) currentSession(r *http.Request) (Session, bool) {
+	return g.readSessionCookie(r)
 }
 
-// readSessionCookie returns the decoded session token from the request's
+// readSessionCookie returns the decoded session value from the request's
 // session cookie, or false if the cookie is missing or fails verification.
-func (g *Gateway) readSessionCookie(r *http.Request) (string, bool) {
+func (g *Gateway) readSessionCookie(r *http.Request) (Session, bool) {
 	cookie, err := r.Cookie(SessionCookieName)
 	if err != nil {
-		return "", false
+		return Session{}, false
 	}
-	token, err := g.decodeSessionCookieValue(cookie.Value)
+	s, err := g.decodeSessionCookieValue(cookie.Value)
 	if err != nil {
-		return "", false
+		return Session{}, false
 	}
-	return token, true
+	return s, true
 }
 
-func (g *Gateway) setSessionCookie(w http.ResponseWriter, r *http.Request, token string, expiresAt time.Time) {
-	encoded, err := g.EncodeSessionCookieValue(token)
+// setSessionCookie encodes s and writes it as the gateway session cookie.
+// The browser MaxAge mirrors gorilla/securecookie's MaxAge so the browser
+// drops the cookie at the same moment the gateway stops accepting it.
+func (g *Gateway) setSessionCookie(w http.ResponseWriter, r *http.Request, s Session) {
+	encoded, err := g.EncodeSessionCookieValue(s)
 	if err != nil {
 		// Encoding only fails if the codec is misconfigured; surface as a
 		// server error rather than silently dropping the session cookie.
@@ -500,10 +488,13 @@ func (g *Gateway) setSessionCookie(w http.ResponseWriter, r *http.Request, token
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		Secure:   r.TLS != nil,
-		Expires:  expiresAt,
-		MaxAge:   int(time.Until(expiresAt).Seconds()),
+		MaxAge:   sessionCookieMaxAgeSeconds,
 	})
 }
+
+// sessionCookieMaxAgeSeconds matches gorilla/securecookie's default MaxAge
+// (24h) so the browser-side and server-side expiry agree.
+const sessionCookieMaxAgeSeconds = 86400
 
 func (g *Gateway) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	// #nosec G124 -- Secure mirrors setSessionCookie so local HTTP development can still clear sessions correctly.

@@ -3,14 +3,13 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	authzpkg "github.com/define42/opensearchgateway/internal/authz"
 	appconfig "github.com/define42/opensearchgateway/internal/config"
@@ -18,7 +17,6 @@ import (
 	ldappkg "github.com/define42/opensearchgateway/internal/ldap"
 	opensearchpkg "github.com/define42/opensearchgateway/internal/opensearch"
 	serverpkg "github.com/define42/opensearchgateway/internal/server"
-	sessionpkg "github.com/define42/opensearchgateway/internal/session"
 	goldap "github.com/go-ldap/ldap/v3"
 )
 
@@ -28,7 +26,7 @@ type (
 	User                = authzpkg.User
 	Access              = authzpkg.Access
 	ldapAuthenticator   = serverpkg.AuthenticateFunc
-	sessionData         = sessionpkg.Data
+	sessionData         = serverpkg.Session
 	ingestResponse      = serverpkg.IngestResponse
 	errorResponse       = serverpkg.ErrorResponse
 	loginPageData       = serverpkg.LoginPageData
@@ -69,7 +67,6 @@ type Client struct {
 type Gateway struct {
 	*serverpkg.Gateway
 
-	sessions        *sessionpkg.Store
 	ingestAuthCache *ingestpkg.AuthCache
 }
 
@@ -112,7 +109,6 @@ func newGateway(client *Client, authenticate ldapAuthenticator) *Gateway {
 	gateway := serverpkg.New(client.Client, authenticate)
 	return &Gateway{
 		Gateway:         gateway,
-		sessions:        gateway.Sessions,
 		ingestAuthCache: gateway.IngestAuthCache,
 	}
 }
@@ -233,34 +229,16 @@ func buildISMPolicy(minDocCount int) ismPolicy {
 	return opensearchpkg.BuildISMPolicy(minDocCount)
 }
 
-type sessionStore = sessionpkg.Store
-
-func newSessionStore() *sessionStore {
-	return sessionpkg.NewStore()
-}
-
-func randomToken() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
-}
-
-// encodeSessionCookieValue produces a session-cookie value signed by the
-// gateway's securecookie codec. Used by tests that need to inject a valid
-// session cookie.
-func encodeSessionCookieValue(g *Gateway, token string) (string, error) {
-	return g.EncodeSessionCookieValue(token)
-}
-
-// mustEncodeSessionCookieValue is the test-friendly wrapper around
-// encodeSessionCookieValue that fails the test on encoding errors.
-func mustEncodeSessionCookieValue(tb testing.TB, g *Gateway, token string) string {
+// mustEncodeSessionCookieFromData mints a session cookie value containing
+// data. Returns the encoded value and a sentinel future Expires so callers
+// can populate the http.Cookie's Expires field — gorilla/securecookie's
+// MaxAge is the actual expiry, this is just so the test cookie isn't
+// rejected by net/http for being in the past.
+func mustEncodeSessionCookieFromData(tb testing.TB, g *Gateway, data sessionData) (string, time.Time) {
 	tb.Helper()
-	encoded, err := encodeSessionCookieValue(g, token)
+	encoded, err := g.EncodeSessionCookieValue(data)
 	if err != nil {
 		tb.Fatalf("encode session cookie: %v", err)
 	}
-	return encoded
+	return encoded, time.Now().Add(time.Hour)
 }

@@ -5,11 +5,9 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-
-	"github.com/define42/opensearchgateway/internal/session"
 )
 
-func (g *Gateway) proxyDashboards(w http.ResponseWriter, r *http.Request, sessionData session.Data) error {
+func (g *Gateway) proxyDashboards(w http.ResponseWriter, r *http.Request, sessionData Session) error {
 	target, err := url.Parse(g.Client.Config.DashboardsURL)
 	if err != nil {
 		return fmt.Errorf("invalid Dashboards URL: %w", err)

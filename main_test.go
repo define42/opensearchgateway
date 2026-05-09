@@ -509,18 +509,15 @@ func TestGatewayAuthenticatedLoginRedirectsToDashboards(t *testing.T) {
 	t.Parallel()
 
 	gateway := newGateway(newClient(Config{}), nil)
-	token, expiresAt, err := gateway.sessions.Create(sessionData{
+	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, sessionData{
 		User:       &User{Name: "alice"},
 		Namespaces: []string{"team1"},
 		AuthHeader: buildBasicAuthorization("alice", "secret"),
 	})
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/login", nil)
-	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: mustEncodeSessionCookieValue(t, gateway, token), Expires: expiresAt})
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: encoded, Expires: expiresAt})
 
 	gateway.Handler().ServeHTTP(recorder, request)
 
@@ -982,18 +979,15 @@ func TestGatewayDashboardsProxyForwardsSessionBasicAuth(t *testing.T) {
 	defer dashboards.Close()
 
 	gateway := newGateway(newClient(testConfigWithDashboards(openSearch, dashboards)), nil)
-	token, expiresAt, err := gateway.sessions.Create(sessionData{
+	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, sessionData{
 		User:       &User{Name: "testuser"},
 		AuthHeader: buildBasicAuthorization("testuser", "dogood"),
 		Namespaces: []string{"team1"},
 	})
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/dashboards/app/home?foo=bar", nil)
-	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: mustEncodeSessionCookieValue(t, gateway, token), Expires: expiresAt})
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: encoded, Expires: expiresAt})
 
 	gateway.Handler().ServeHTTP(recorder, request)
 
@@ -1031,18 +1025,15 @@ func TestGatewayDashboardsProxyDoesNotForceTenantForMultiNamespaceSession(t *tes
 	defer dashboards.Close()
 
 	gateway := newGateway(newClient(testConfigWithDashboards(openSearch, dashboards)), nil)
-	token, expiresAt, err := gateway.sessions.Create(sessionData{
+	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, sessionData{
 		User:       &User{Name: "testuser"},
 		AuthHeader: buildBasicAuthorization("testuser", "dogood"),
 		Namespaces: []string{"team1", "team2"},
 	})
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/dashboards/app/home", nil)
-	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: mustEncodeSessionCookieValue(t, gateway, token), Expires: expiresAt})
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: encoded, Expires: expiresAt})
 
 	gateway.Handler().ServeHTTP(recorder, request)
 
@@ -1073,15 +1064,12 @@ func TestGatewayDashboardsProxyForwardsTenantSelectionQuery(t *testing.T) {
 	defer dashboards.Close()
 
 	gateway := newGateway(newClient(testConfigWithDashboards(openSearch, dashboards)), nil)
-	token, expiresAt, err := gateway.sessions.Create(sessionData{
+	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, sessionData{
 		User:       &User{Name: "testuser"},
 		AuthHeader: buildBasicAuthorization("testuser", "dogood"),
 		Namespaces: []string{"team1", "team10", "team2"},
 	})
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
-	cookie := &http.Cookie{Name: sessionCookieName, Value: mustEncodeSessionCookieValue(t, gateway, token), Expires: expiresAt}
+	cookie := &http.Cookie{Name: sessionCookieName, Value: encoded, Expires: expiresAt}
 
 	firstRecorder := httptest.NewRecorder()
 	firstRequest := httptest.NewRequest(http.MethodGet, "/dashboards/app/home?security_tenant=team10", nil)
@@ -1118,18 +1106,15 @@ func TestGatewayDashboardsProxyLeavesEmptyIndexPatternFindResultsUntouched(t *te
 	defer dashboards.Close()
 
 	gateway := newGateway(newClient(testConfigWithDashboards(openSearch, dashboards)), nil)
-	token, expiresAt, err := gateway.sessions.Create(sessionData{
+	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, sessionData{
 		User:       &User{Name: "testuser"},
 		AuthHeader: buildBasicAuthorization("testuser", "dogood"),
 		Namespaces: []string{"team1"},
 	})
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/dashboards/api/saved_objects/_find?fields=title&per_page=10000&type=index-pattern", nil)
-	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: mustEncodeSessionCookieValue(t, gateway, token), Expires: expiresAt})
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: encoded, Expires: expiresAt})
 
 	gateway.Handler().ServeHTTP(recorder, request)
 
@@ -1157,18 +1142,15 @@ func TestGatewayDashboardsProxyLeavesNonEmptyIndexPatternFindResultsUntouched(t 
 	defer dashboards.Close()
 
 	gateway := newGateway(newClient(testConfigWithDashboards(openSearch, dashboards)), nil)
-	token, expiresAt, err := gateway.sessions.Create(sessionData{
+	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, sessionData{
 		User:       &User{Name: "testuser"},
 		AuthHeader: buildBasicAuthorization("testuser", "dogood"),
 		Namespaces: []string{"team1"},
 	})
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/dashboards/api/saved_objects/_find?fields=title&per_page=10000&type=index-pattern", nil)
-	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: mustEncodeSessionCookieValue(t, gateway, token), Expires: expiresAt})
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: encoded, Expires: expiresAt})
 
 	gateway.Handler().ServeHTTP(recorder, request)
 
@@ -1194,31 +1176,34 @@ func TestGatewayLogoutClearsSession(t *testing.T) {
 	defer dashboards.Close()
 
 	gateway := newGateway(newClient(testConfigWithDashboards(openSearch, dashboards)), nil)
-	token, expiresAt, err := gateway.sessions.Create(sessionData{
+	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, sessionData{
 		User:       &User{Name: "testuser"},
 		AuthHeader: buildBasicAuthorization("testuser", "dogood"),
 	})
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
 
 	logoutRecorder := httptest.NewRecorder()
 	logoutRequest := httptest.NewRequest(http.MethodPost, "/logout", nil)
-	logoutRequest.AddCookie(&http.Cookie{Name: sessionCookieName, Value: mustEncodeSessionCookieValue(t, gateway, token), Expires: expiresAt})
+	logoutRequest.AddCookie(&http.Cookie{Name: sessionCookieName, Value: encoded, Expires: expiresAt})
 
 	gateway.Handler().ServeHTTP(logoutRecorder, logoutRequest)
 
 	if logoutRecorder.Code != http.StatusSeeOther {
 		t.Fatalf("expected logout redirect, got %d", logoutRecorder.Code)
 	}
-	if _, ok := gateway.sessions.Get(token); ok {
-		t.Fatal("expected session to be deleted")
+
+	// With stateless cookies the gateway can no longer revoke an issued
+	// cookie server-side; the strongest property the logout response can
+	// guarantee is that the browser's copy is cleared.
+	clearedCookie := findCookie(logoutRecorder.Result().Cookies(), sessionCookieName)
+	if clearedCookie == nil {
+		t.Fatal("expected logout response to set a clearing session cookie")
+	}
+	if clearedCookie.Value != "" || clearedCookie.MaxAge >= 0 {
+		t.Fatalf("expected clearing cookie (empty value, negative MaxAge), got value=%q MaxAge=%d", clearedCookie.Value, clearedCookie.MaxAge)
 	}
 
 	dashboardRecorder := httptest.NewRecorder()
 	dashboardRequest := httptest.NewRequest(http.MethodGet, "/dashboards/app/home", nil)
-	dashboardRequest.AddCookie(&http.Cookie{Name: sessionCookieName, Value: mustEncodeSessionCookieValue(t, gateway, token), Expires: expiresAt})
-
 	gateway.Handler().ServeHTTP(dashboardRecorder, dashboardRequest)
 
 	if dashboardRecorder.Code != http.StatusSeeOther {
@@ -1227,6 +1212,15 @@ func TestGatewayLogoutClearsSession(t *testing.T) {
 	if got := dashboardRecorder.Header().Get("Location"); got != "/login" {
 		t.Fatalf("expected redirect to /login after logout, got %q", got)
 	}
+}
+
+func findCookie(cookies []*http.Cookie, name string) *http.Cookie {
+	for _, c := range cookies {
+		if c.Name == name {
+			return c
+		}
+	}
+	return nil
 }
 
 func TestGatewayInvalidSessionRedirectsToLogin(t *testing.T) {
@@ -1387,20 +1381,17 @@ func TestGatewayIngestUsesAuthenticatedSessionAccess(t *testing.T) {
 		t.Fatalf("session-backed ingest should not call LDAP authenticate")
 		return nil, nil, nil
 	})
-	token, expiresAt, err := gateway.sessions.Create(sessionData{
+	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, sessionData{
 		User:       &User{Name: "ingestuser", Namespace: "team10"},
 		Access:     []Access{{Group: "team10_rw", Namespace: "team10"}},
 		Namespaces: []string{"team10"},
 		AuthHeader: buildBasicAuthorization("ingestuser", "dogood"),
 	})
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/ingest/team10-hello", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
 	request.Header.Set("Content-Type", "application/json")
-	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: mustEncodeSessionCookieValue(t, gateway, token), Expires: expiresAt})
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: encoded, Expires: expiresAt})
 
 	gateway.Handler().ServeHTTP(recorder, request)
 

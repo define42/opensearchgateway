@@ -276,17 +276,14 @@ func TestGatewayLogoutEvictsIngestAuthCache(t *testing.T) {
 		t.Fatalf("seed cache: %v", err)
 	}
 
-	token, expiresAt, err := gateway.sessions.Create(sessionData{
+	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, sessionData{
 		User:       &User{Name: "ingestuser"},
 		AuthHeader: buildBasicAuthorization("ingestuser", "dogood"),
 	})
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/logout", nil)
-	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: mustEncodeSessionCookieValue(t, gateway, token), Expires: expiresAt})
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: encoded, Expires: expiresAt})
 
 	gateway.Handler().ServeHTTP(recorder, request)
 

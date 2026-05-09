@@ -213,18 +213,15 @@ func TestGatewayDashboardsCoverage(t *testing.T) {
 
 	t.Run("proxy error returns bad gateway", func(t *testing.T) {
 		gateway := newGateway(newClient(Config{DashboardsURL: "://bad"}), nil)
-		token, expiresAt, err := gateway.sessions.Create(sessionData{
+		encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, sessionData{
 			User:       &User{Name: "alice"},
 			Namespaces: []string{"team1"},
 			AuthHeader: buildBasicAuthorization("alice", "secret"),
 		})
-		if err != nil {
-			t.Fatalf("create session: %v", err)
-		}
 
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodGet, "/dashboards", nil)
-		request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: mustEncodeSessionCookieValue(t, gateway, token), Expires: expiresAt})
+		request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: encoded, Expires: expiresAt})
 		gateway.Handler().ServeHTTP(recorder, request)
 
 		if recorder.Code != http.StatusBadGateway {
@@ -233,7 +230,6 @@ func TestGatewayDashboardsCoverage(t *testing.T) {
 	})
 }
 
-//nolint:gocognit,funlen // Coverage table exercises multiple login failure branches in one place.
 func TestHandleLoginSubmitCoverage(t *testing.T) {
 	t.Run("parse form failure", func(t *testing.T) {
 		gateway := testGatewayHandler(Config{})
@@ -638,31 +634,6 @@ func TestDashboardsHelperCoverage(t *testing.T) {
 }
 
 func TestDecodeAndSessionHelpersCoverage(t *testing.T) {
-	t.Run("session store create and touch branches", func(t *testing.T) {
-		store := newSessionStore()
-		token, expiresAt, err := store.Create(sessionData{User: &User{Name: "alice"}})
-		if err != nil {
-			t.Fatalf("Create returned error: %v", err)
-		}
-		if token == "" || expiresAt.IsZero() {
-			t.Fatalf("expected created session token and expiry, got token=%q expires=%v", token, expiresAt)
-		}
-
-		if _, ok := store.Touch("missing"); ok {
-			t.Fatal("expected missing session touch to fail")
-		}
-	})
-
-	t.Run("random token success", func(t *testing.T) {
-		token, err := randomToken()
-		if err != nil {
-			t.Fatalf("randomToken returned error: %v", err)
-		}
-		if token == "" {
-			t.Fatal("expected non-empty token")
-		}
-	})
-
 	t.Run("forwarded proto handles https", func(t *testing.T) {
 		if got := forwardedProto(httptest.NewRequest(http.MethodGet, "http://example.com", nil)); got != "http" {
 			t.Fatalf("expected http proto, got %q", got)
