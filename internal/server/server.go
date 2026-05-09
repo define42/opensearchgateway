@@ -2,10 +2,12 @@
 package server
 
 import (
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"strings"
@@ -242,7 +244,16 @@ func (g *Gateway) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	namespaces, err := g.Client.ProvisionLoginUser(r.Context(), username, password, access)
+	internalPassword, err := generateInternalUserPassword()
+	if err != nil {
+		g.RenderLoginPage(w, http.StatusBadGateway, LoginPageData{
+			Error:    "failed to allocate session credentials",
+			Username: username,
+		})
+		return
+	}
+
+	namespaces, err := g.Client.ProvisionLoginUser(r.Context(), username, internalPassword, access)
 	if err != nil {
 		status := http.StatusBadGateway
 		if errors.Is(err, opensearch.ErrReservedInternalUser) {
@@ -263,7 +274,7 @@ func (g *Gateway) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		User:       user,
 		Access:     access,
 		Namespaces: namespaces,
-		AuthHeader: BuildBasicAuthorization(username, password),
+		AuthHeader: BuildBasicAuthorization(username, internalPassword),
 		CreatedAt:  time.Now(),
 	})
 	if err != nil {
@@ -512,6 +523,20 @@ func (g *Gateway) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 func BuildBasicAuthorization(username, password string) string {
 	token := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
 	return "Basic " + token
+}
+
+// generateInternalUserPassword returns a random password used as the
+// per-session OpenSearch internal-user password. The LDAP password is never
+// stored in OpenSearch; only this generated value is hashed there and embedded
+// in the encrypted session cookie's basic-auth header for the Dashboards proxy.
+func generateInternalUserPassword() (string, error) {
+	b := make([]byte, 32)
+	// io.ReadFull(rand.Reader, ...) returns errors normally, while rand.Read
+	// fatals in Go 1.22+ — the former keeps the failure path testable.
+	if _, err := io.ReadFull(rand.Reader, b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
 // ForwardedProto reports the original request scheme for proxy headers.

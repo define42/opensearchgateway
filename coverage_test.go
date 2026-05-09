@@ -251,46 +251,20 @@ func TestHandleLoginSubmitCoverage(t *testing.T) {
 		}
 	})
 
-	t.Run("password hash failure returns login error page", func(t *testing.T) {
+	t.Run("password generation failure returns login error page", func(t *testing.T) {
 		oldReader := cryptorand.Reader
 		cryptorand.Reader = errorReader{err: errors.New("entropy unavailable")}
 		defer func() {
 			cryptorand.Reader = oldReader
 		}()
 
-		var openSearchCalls []string
-		openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			openSearchCalls = append(openSearchCalls, r.Method+" "+r.URL.Path)
-
-			switch r.Method + " " + r.URL.Path {
-			case "GET /_plugins/_security/api/internalusers/testuser":
-				http.NotFound(w, r)
-			case "PUT /_plugins/_security/api/roles/gateway_team1_rw":
-				w.WriteHeader(http.StatusCreated)
-				_, _ = io.WriteString(w, `{}`)
-			case "GET /_plugins/_security/api/tenants/team1":
-				w.WriteHeader(http.StatusOK)
-				_, _ = io.WriteString(w, `{"team1":{"reserved":false}}`)
-			case "PUT /_plugins/_security/api/internalusers/testuser":
-				w.WriteHeader(http.StatusCreated)
-				_, _ = io.WriteString(w, `{}`)
-			default:
-				t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
-			}
+		openSearch := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
 		}))
 		defer openSearch.Close()
 
-		dashboards := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			switch r.Method + " " + r.URL.RequestURI() {
-			case "POST /dashboards/api/saved_objects/index-pattern/gateway-index-pattern-team1?overwrite=true":
-				w.WriteHeader(http.StatusOK)
-				_, _ = io.WriteString(w, `{}`)
-			case "POST /dashboards/api/opensearch-dashboards/settings/defaultIndex":
-				w.WriteHeader(http.StatusOK)
-				_, _ = io.WriteString(w, `{}`)
-			default:
-				t.Fatalf("unexpected Dashboards request: %s %s", r.Method, r.URL.RequestURI())
-			}
+		dashboards := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			t.Fatalf("unexpected Dashboards request: %s %s", r.Method, r.URL.RequestURI())
 		}))
 		defer dashboards.Close()
 
@@ -308,15 +282,8 @@ func TestHandleLoginSubmitCoverage(t *testing.T) {
 		if recorder.Code != http.StatusBadGateway {
 			t.Fatalf("expected status 502, got %d: %s", recorder.Code, recorder.Body.String())
 		}
-		if !strings.Contains(recorder.Body.String(), `hash OpenSearch password for &#34;testuser&#34;: entropy unavailable`) {
-			t.Fatalf("expected hash failure error page, got %q", recorder.Body.String())
-		}
-		if !reflect.DeepEqual(openSearchCalls, []string{
-			"GET /_plugins/_security/api/internalusers/testuser",
-			"PUT /_plugins/_security/api/roles/gateway_team1_rw",
-			"GET /_plugins/_security/api/tenants/team1",
-		}) {
-			t.Fatalf("unexpected OpenSearch sequence: %#v", openSearchCalls)
+		if !strings.Contains(recorder.Body.String(), "failed to allocate session credentials") {
+			t.Fatalf("expected password-generation failure page, got %q", recorder.Body.String())
 		}
 	})
 }
