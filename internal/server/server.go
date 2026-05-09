@@ -29,7 +29,6 @@ import (
 type Session struct {
 	User       *authz.User
 	Access     []authz.Access
-	Namespaces []string
 	AuthHeader string
 }
 
@@ -256,8 +255,7 @@ func (g *Gateway) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	namespaces, err := g.Client.ProvisionLoginUser(r.Context(), username, internalPassword, access)
-	if err != nil {
+	if err := g.Client.ProvisionLoginUser(r.Context(), username, internalPassword, access); err != nil {
 		status := http.StatusBadGateway
 		if errors.Is(err, opensearch.ErrReservedInternalUser) {
 			status = http.StatusForbidden
@@ -272,7 +270,6 @@ func (g *Gateway) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	g.setSessionCookie(w, r, Session{
 		User:       user,
 		Access:     access,
-		Namespaces: namespaces,
 		AuthHeader: BuildBasicAuthorization(username, internalPassword),
 	})
 	http.Redirect(w, r, dashboardsLandingPath(), http.StatusSeeOther)

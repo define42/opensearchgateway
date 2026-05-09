@@ -13,29 +13,35 @@ import (
 )
 
 // ProvisionLoginUser ensures roles, tenants, data views, and the internal user.
-func (c *Client) ProvisionLoginUser(ctx context.Context, username, password string, access []authz.Access) ([]string, error) {
+//
+// internalUserPassword is the password to set on the OpenSearch internal user
+// for username. It is NOT the caller's LDAP password: the gateway mints a fresh
+// random value per login so the LDAP credential never reaches OpenSearch's
+// internal user database. Callers must keep that value out of any persistent
+// store other than the gateway's session cookie.
+func (c *Client) ProvisionLoginUser(ctx context.Context, username, internalUserPassword string, access []authz.Access) error {
 	effective := authz.NormalizeAccessByNamespace(access)
 	if len(effective) == 0 {
-		return nil, fmt.Errorf("no LDAP namespaces available for %s", username)
+		return fmt.Errorf("no LDAP namespaces available for %s", username)
 	}
 
 	if err := c.EnsureInternalUserWritable(ctx, username); err != nil {
-		return nil, err
+		return err
 	}
 
 	roleNames := make([]string, 0, len(effective)+1)
 	namespaces := make([]string, 0, len(effective))
 	for _, item := range effective {
 		if !authz.ValidNamespace(item.Namespace) {
-			return nil, fmt.Errorf("LDAP namespace %q cannot be mapped to OpenSearch resources", item.Namespace)
+			return fmt.Errorf("LDAP namespace %q cannot be mapped to OpenSearch resources", item.Namespace)
 		}
 
 		roleName := authz.BuildGatewayRoleName(item.Namespace, authz.RoleModeForAccess(item))
 		if err := c.EnsureSecurityRole(ctx, roleName, item); err != nil {
-			return nil, err
+			return err
 		}
 		if err := c.EnsureDashboardDataView(ctx, item.Namespace, item.Namespace); err != nil {
-			return nil, err
+			return err
 		}
 
 		roleNames = append(roleNames, roleName)
@@ -46,11 +52,7 @@ func (c *Client) ProvisionLoginUser(ctx context.Context, username, password stri
 	sort.Strings(namespaces)
 	roleNames = append([]string{"kibana_user"}, roleNames...)
 
-	if err := c.UpsertInternalUser(ctx, username, password, roleNames, authz.AccessGroupNames(access), namespaces); err != nil {
-		return nil, err
-	}
-
-	return namespaces, nil
+	return c.UpsertInternalUser(ctx, username, internalUserPassword, roleNames, authz.AccessGroupNames(access), namespaces)
 }
 
 // EnsureSecurityRole upserts the OpenSearch role used for a namespace access mode.
@@ -95,8 +97,12 @@ func RoleRequestForAccess(access authz.Access) SecurityRoleRequest {
 }
 
 // UpsertInternalUser creates or replaces an OpenSearch internal user.
-func (c *Client) UpsertInternalUser(ctx context.Context, username, password string, roleNames, backendRoles, namespaces []string) error {
-	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+//
+// internalUserPassword is bcrypt-hashed and stored on the OpenSearch internal
+// user record. It is NOT an LDAP credential: the gateway generates a random
+// value per login so the LDAP password never reaches OpenSearch.
+func (c *Client) UpsertInternalUser(ctx context.Context, username, internalUserPassword string, roleNames, backendRoles, namespaces []string) error {
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(internalUserPassword), bcrypt.DefaultCost)
 	if err != nil {
 		return fmt.Errorf("hash OpenSearch password for %q: %w", username, err)
 	}

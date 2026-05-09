@@ -511,7 +511,6 @@ func TestGatewayAuthenticatedLoginRedirectsToDashboards(t *testing.T) {
 	gateway := newGateway(newClient(Config{}), nil)
 	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, sessionData{
 		User:       &User{Name: "alice"},
-		Namespaces: []string{"team1"},
 		AuthHeader: buildBasicAuthorization("alice", "secret"),
 	})
 
@@ -982,7 +981,6 @@ func TestGatewayDashboardsProxyForwardsSessionBasicAuth(t *testing.T) {
 	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, sessionData{
 		User:       &User{Name: "testuser"},
 		AuthHeader: buildBasicAuthorization("testuser", "dogood"),
-		Namespaces: []string{"team1"},
 	})
 
 	recorder := httptest.NewRecorder()
@@ -1028,7 +1026,6 @@ func TestGatewayDashboardsProxyDoesNotForceTenantForMultiNamespaceSession(t *tes
 	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, sessionData{
 		User:       &User{Name: "testuser"},
 		AuthHeader: buildBasicAuthorization("testuser", "dogood"),
-		Namespaces: []string{"team1", "team2"},
 	})
 
 	recorder := httptest.NewRecorder()
@@ -1067,7 +1064,6 @@ func TestGatewayDashboardsProxyForwardsTenantSelectionQuery(t *testing.T) {
 	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, sessionData{
 		User:       &User{Name: "testuser"},
 		AuthHeader: buildBasicAuthorization("testuser", "dogood"),
-		Namespaces: []string{"team1", "team10", "team2"},
 	})
 	cookie := &http.Cookie{Name: sessionCookieName, Value: encoded, Expires: expiresAt}
 
@@ -1109,7 +1105,6 @@ func TestGatewayDashboardsProxyLeavesEmptyIndexPatternFindResultsUntouched(t *te
 	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, sessionData{
 		User:       &User{Name: "testuser"},
 		AuthHeader: buildBasicAuthorization("testuser", "dogood"),
-		Namespaces: []string{"team1"},
 	})
 
 	recorder := httptest.NewRecorder()
@@ -1145,7 +1140,6 @@ func TestGatewayDashboardsProxyLeavesNonEmptyIndexPatternFindResultsUntouched(t 
 	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, sessionData{
 		User:       &User{Name: "testuser"},
 		AuthHeader: buildBasicAuthorization("testuser", "dogood"),
-		Namespaces: []string{"team1"},
 	})
 
 	recorder := httptest.NewRecorder()
@@ -1384,7 +1378,6 @@ func TestGatewayIngestUsesAuthenticatedSessionAccess(t *testing.T) {
 	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, sessionData{
 		User:       &User{Name: "ingestuser", Namespace: "team10"},
 		Access:     []Access{{Group: "team10_rw", Namespace: "team10"}},
-		Namespaces: []string{"team10"},
 		AuthHeader: buildBasicAuthorization("ingestuser", "dogood"),
 	})
 

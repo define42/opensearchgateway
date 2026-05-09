@@ -215,7 +215,6 @@ func TestGatewayDashboardsCoverage(t *testing.T) {
 		gateway := newGateway(newClient(Config{DashboardsURL: "://bad"}), nil)
 		encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, sessionData{
 			User:       &User{Name: "alice"},
-			Namespaces: []string{"team1"},
 			AuthHeader: buildBasicAuthorization("alice", "secret"),
 		})
 
@@ -306,7 +305,7 @@ func TestDecodeJSONObjectCoverage(t *testing.T) {
 func TestProvisionAndSecurityHelpersCoverage(t *testing.T) {
 	t.Run("provision login user without access", func(t *testing.T) {
 		client := newClient(Config{})
-		if _, err := client.ProvisionLoginUser(context.Background(), "alice", "secret", nil); err == nil {
+		if err := client.ProvisionLoginUser(context.Background(), "alice", "secret", nil); err == nil {
 			t.Fatal("expected missing-access error")
 		}
 	})
@@ -321,7 +320,7 @@ func TestProvisionAndSecurityHelpersCoverage(t *testing.T) {
 		defer openSearch.Close()
 
 		client := newClient(testConfig(openSearch))
-		_, err := client.ProvisionLoginUser(context.Background(), "alice", "secret", []Access{
+		err := client.ProvisionLoginUser(context.Background(), "alice", "secret", []Access{
 			{Group: "bad_rw", Namespace: "bad.namespace"},
 		})
 		if err == nil || !strings.Contains(err.Error(), "cannot be mapped") {
