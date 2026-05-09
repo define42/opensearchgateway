@@ -2,13 +2,10 @@ package main
 
 import (
 	"errors"
-	"net/http"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
-
-	opensearchpkg "github.com/define42/opensearchgateway/internal/opensearch"
 )
 
 func TestMainFailurePathExitsNonZero(t *testing.T) {
@@ -37,20 +34,5 @@ func TestMainFailurePathExitsNonZero(t *testing.T) {
 	}
 	if !strings.Contains(string(output), "error:") {
 		t.Fatalf("expected fatal error output, got %q", string(output))
-	}
-}
-
-func TestClientMarkEnsuredHelpers(t *testing.T) {
-	client := newClient(Config{HTTPClient: http.DefaultClient})
-
-	client.MarkTenantEnsured("orders")
-	if _, ok := client.ensuredTenants.Load("orders"); !ok {
-		t.Fatal("expected tenant cache to contain orders")
-	}
-
-	key := "orders/" + opensearchpkg.BuildDataViewID("orders")
-	client.MarkDataViewEnsured(key)
-	if _, ok := client.ensuredDataViews.Load(key); !ok {
-		t.Fatal("expected data-view cache to contain orders data view")
 	}
 }

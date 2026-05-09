@@ -77,7 +77,11 @@ func defaultHTTPClient() *http.Client {
 }
 
 func mustParse(s string) *url.URL {
-	return appconfig.MustParse(s)
+	u, err := url.Parse(s)
+	if err != nil {
+		panic(err)
+	}
+	return u
 }
 
 func getenv(key, fallback string) string {

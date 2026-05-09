@@ -39,14 +39,6 @@ func (e *ResponseError) Error() string {
 	return fmt.Sprintf("%s %s failed: status=%d body=%s", e.Method, e.Path, e.StatusCode, e.Body)
 }
 
-// IngestResponse is the gateway-facing response after a successful index write.
-type IngestResponse struct {
-	Result       string `json:"result"`
-	WriteAlias   string `json:"write_alias"`
-	DocumentID   string `json:"document_id"`
-	Bootstrapped bool   `json:"bootstrapped"`
-}
-
 // IndexDocumentResponse captures the OpenSearch index API response fields used by the gateway.
 type IndexDocumentResponse struct {
 	ID     string `json:"_id"`
@@ -164,14 +156,4 @@ type ISMTransition struct {
 // NewClient constructs a client for OpenSearch and Dashboards APIs.
 func NewClient(cfg config.Config) *Client {
 	return &Client{Config: cfg}
-}
-
-// MarkTenantEnsured caches a successfully ensured tenant.
-func (c *Client) MarkTenantEnsured(tenantName string) {
-	c.EnsuredTenants.Store(tenantName, true)
-}
-
-// MarkDataViewEnsured caches a successfully ensured tenant/data-view pair.
-func (c *Client) MarkDataViewEnsured(cacheKey string) {
-	c.EnsuredDataViews.Store(cacheKey, true)
 }

@@ -4,7 +4,6 @@ package config
 import (
 	"crypto/tls"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -48,15 +47,6 @@ type LDAPConfig struct {
 	UserMailDomain  string
 	StartTLS        bool
 	SkipTLSVerify   bool
-}
-
-// MustParse parses s as a URL and panics on failure.
-func MustParse(s string) *url.URL {
-	u, err := url.Parse(s)
-	if err != nil {
-		panic(err)
-	}
-	return u
 }
 
 // DefaultHTTPClient builds the default upstream HTTP client for the gateway.
