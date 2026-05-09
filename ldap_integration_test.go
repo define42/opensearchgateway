@@ -16,8 +16,13 @@ import (
 	"testing"
 	"time"
 
+	appconfig "github.com/define42/opensearchgateway/internal/config"
 	ldappkg "github.com/define42/opensearchgateway/internal/ldap"
+	opensearchpkg "github.com/define42/opensearchgateway/internal/opensearch"
+	serverpkg "github.com/define42/opensearchgateway/internal/server"
 )
+
+const testDefaultPassword = "Cedar7!FluxOrbit29"
 
 //nolint:gocognit,cyclop,funlen // Docker-backed integration scenario verifies the full LDAP ingest path.
 func TestLDAPIngestUserCanIngestTeam10(t *testing.T) {
@@ -49,12 +54,12 @@ func TestLDAPIngestUserCanIngestTeam10(t *testing.T) {
 		mu.Unlock()
 
 		switch r.Method + " " + r.URL.Path {
-		case "GET /_plugins/_ism/policies/" + ismPolicyID:
+		case "GET /_plugins/_ism/policies/" + opensearchpkg.DefaultISMPolicyID:
 			http.NotFound(w, r)
-		case "PUT /_plugins/_ism/policies/" + ismPolicyID:
+		case "PUT /_plugins/_ism/policies/" + opensearchpkg.DefaultISMPolicyID:
 			w.WriteHeader(http.StatusCreated)
 			_, _ = io.WriteString(w, `{}`)
-		case "PUT /_index_template/" + indexTemplateName:
+		case "PUT /_index_template/" + opensearchpkg.DefaultIndexTemplateName:
 			w.WriteHeader(http.StatusCreated)
 			_, _ = io.WriteString(w, `{}`)
 		case "GET /_plugins/_security/api/tenants/team10":
@@ -109,14 +114,14 @@ func TestLDAPIngestUserCanIngestTeam10(t *testing.T) {
 	}))
 	defer dashboards.Close()
 
-	cfg := Config{
+	cfg := appconfig.Config{
 		BaseURL:            openSearch.URL,
 		Username:           "admin",
-		Password:           defaultPassword,
+		Password:           testDefaultPassword,
 		DashboardsURL:      dashboards.URL,
 		DashboardsUsername: "admin",
-		DashboardsPassword: defaultPassword,
-		DashboardsTenant:   defaultTenant,
+		DashboardsPassword: testDefaultPassword,
+		DashboardsTenant:   appconfig.DefaultTenant,
 		ListenAddr:         ":0",
 		Shards:             2,
 		Replicas:           2,
@@ -126,7 +131,7 @@ func TestLDAPIngestUserCanIngestTeam10(t *testing.T) {
 	baseURL, gateway, stopGateway := startIntegrationGateway(ctx, t, cfg)
 	defer stopGateway()
 
-	responses := make([]ingestResponse, 0, 2)
+	responses := make([]serverpkg.IngestResponse, 0, 2)
 	messages := []string{"ldap ingest integration", "ldap ingest cached"}
 	for _, message := range messages {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/ingest/team10-hello", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"`+message+`"}`))
@@ -150,7 +155,7 @@ func TestLDAPIngestUserCanIngestTeam10(t *testing.T) {
 			t.Fatalf("expected status 201, got %d: %s", resp.StatusCode, string(body))
 		}
 
-		var response ingestResponse
+		var response serverpkg.IngestResponse
 		if err := json.Unmarshal(body, &response); err != nil {
 			t.Fatalf("decode ingest response: %v", err)
 		}
@@ -190,7 +195,7 @@ func TestLDAPIngestUserCanIngestTeam10(t *testing.T) {
 		t.Fatalf("expected tenant-scoped Dashboards setup only once, got %#v", dashboardsCalls)
 	}
 
-	stats := gateway.ingestAuthCache.Stats()
+	stats := gateway.IngestAuthCache.Stats()
 	if stats.Hits != 1 || stats.Misses != 1 || stats.Expired != 0 || stats.Entries != 1 {
 		t.Fatalf("unexpected ingest auth cache stats: %+v", stats)
 	}
@@ -223,12 +228,12 @@ func TestLDAPJohndoeCannotIngestTeam10(t *testing.T) {
 		mu.Unlock()
 
 		switch r.Method + " " + r.URL.Path {
-		case "GET /_plugins/_ism/policies/" + ismPolicyID:
+		case "GET /_plugins/_ism/policies/" + opensearchpkg.DefaultISMPolicyID:
 			http.NotFound(w, r)
-		case "PUT /_plugins/_ism/policies/" + ismPolicyID:
+		case "PUT /_plugins/_ism/policies/" + opensearchpkg.DefaultISMPolicyID:
 			w.WriteHeader(http.StatusCreated)
 			_, _ = io.WriteString(w, `{}`)
-		case "PUT /_index_template/" + indexTemplateName:
+		case "PUT /_index_template/" + opensearchpkg.DefaultIndexTemplateName:
 			w.WriteHeader(http.StatusCreated)
 			_, _ = io.WriteString(w, `{}`)
 		default:
@@ -242,14 +247,14 @@ func TestLDAPJohndoeCannotIngestTeam10(t *testing.T) {
 	}))
 	defer dashboards.Close()
 
-	cfg := Config{
+	cfg := appconfig.Config{
 		BaseURL:            openSearch.URL,
 		Username:           "admin",
-		Password:           defaultPassword,
+		Password:           testDefaultPassword,
 		DashboardsURL:      dashboards.URL,
 		DashboardsUsername: "admin",
-		DashboardsPassword: defaultPassword,
-		DashboardsTenant:   defaultTenant,
+		DashboardsPassword: testDefaultPassword,
+		DashboardsTenant:   appconfig.DefaultTenant,
 		ListenAddr:         ":0",
 		Shards:             2,
 		Replicas:           2,
@@ -282,7 +287,7 @@ func TestLDAPJohndoeCannotIngestTeam10(t *testing.T) {
 		t.Fatalf("expected status 403, got %d: %s", resp.StatusCode, string(body))
 	}
 
-	var response errorResponse
+	var response serverpkg.ErrorResponse
 	if err := json.Unmarshal(body, &response); err != nil {
 		t.Fatalf("decode error response: %v", err)
 	}
@@ -319,15 +324,15 @@ func TestLDAPAuthenticateAccessErrorScenarios(t *testing.T) {
 	t.Setenv("LDAP_USER_DOMAIN", "@example.com")
 
 	t.Run("invalid credentials", func(t *testing.T) {
-		user, access, err := ldapAuthenticateAccess("johndoe", "wrongpass")
-		if !errors.Is(err, errLDAPInvalidCredentials) {
+		user, access, err := ldappkg.New(appconfig.LoadLDAP()).AuthenticateAccess("johndoe", "wrongpass")
+		if !errors.Is(err, ldappkg.ErrInvalidCredentials) {
 			t.Fatalf("expected invalid credentials error, got user=%+v access=%+v err=%v", user, access, err)
 		}
 	})
 
 	t.Run("unauthorized groups", func(t *testing.T) {
-		user, access, err := ldapAuthenticateAccess("serviceuser", "mysecret")
-		if !errors.Is(err, errLDAPUnauthorized) {
+		user, access, err := ldappkg.New(appconfig.LoadLDAP()).AuthenticateAccess("serviceuser", "mysecret")
+		if !errors.Is(err, ldappkg.ErrUnauthorized) {
 			t.Fatalf("expected unauthorized error, got user=%+v access=%+v err=%v", user, access, err)
 		}
 	})
@@ -408,7 +413,7 @@ func waitForLDAPReady(ctx context.Context, t *testing.T, ldapURL string) {
 
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		cfg := LDAPConfig{
+		cfg := appconfig.LDAPConfig{
 			URL:             ldapURL,
 			BaseDN:          "dc=glauth,dc=com",
 			UserFilter:      "(mail=%s)",
@@ -431,7 +436,7 @@ func waitForLDAPReady(ctx context.Context, t *testing.T, ldapURL string) {
 	t.Fatalf("LDAP did not become ready in time")
 }
 
-func startIntegrationGateway(ctx context.Context, t *testing.T, cfg Config) (string, *Gateway, func()) {
+func startIntegrationGateway(ctx context.Context, t *testing.T, cfg appconfig.Config) (string, *serverpkg.Gateway, func()) {
 	t.Helper()
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -440,14 +445,14 @@ func startIntegrationGateway(ctx context.Context, t *testing.T, cfg Config) (str
 	}
 
 	baseURL := "http://" + listener.Addr().String()
-	client := newClient(cfg)
-	if err := client.EnsureISMPolicy(ctx, ismPolicyID, 100000000); err != nil {
+	client := opensearchpkg.NewClient(cfg)
+	if err := client.EnsureISMPolicy(ctx, opensearchpkg.DefaultISMPolicyID, 100000000); err != nil {
 		t.Fatalf("bootstrap ISM policy: %v", err)
 	}
-	if err := client.EnsureIndexTemplate(ctx, indexTemplateName); err != nil {
+	if err := client.EnsureIndexTemplate(ctx, opensearchpkg.DefaultIndexTemplateName); err != nil {
 		t.Fatalf("bootstrap index template: %v", err)
 	}
-	gateway := newGateway(client, ldapAuthenticateAccess)
+	gateway := newTestGateway(client, ldappkg.New(appconfig.LoadLDAP()).AuthenticateAccess)
 	runCtx, cancel := context.WithCancel(ctx)
 	errCh := make(chan error, 1)
 

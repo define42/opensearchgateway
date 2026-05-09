@@ -1,3 +1,4 @@
+// Package main contains gateway command and HTTP integration tests.
 package main
 
 import (
@@ -12,11 +13,17 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	authzpkg "github.com/define42/opensearchgateway/internal/authz"
+	appconfig "github.com/define42/opensearchgateway/internal/config"
+	ingestpkg "github.com/define42/opensearchgateway/internal/ingest"
+	opensearchpkg "github.com/define42/opensearchgateway/internal/opensearch"
+	serverpkg "github.com/define42/opensearchgateway/internal/server"
 )
 
-func TestDefaultHTTPClientAndGetenv(t *testing.T) {
+func TestDefaultHTTPClient(t *testing.T) {
 	t.Setenv("OPENSEARCH_SKIP_TLS_VERIFY", "true")
-	client := defaultHTTPClient()
+	client := appconfig.DefaultHTTPClient()
 	if client.Timeout != 30*time.Second {
 		t.Fatalf("unexpected timeout: %v", client.Timeout)
 	}
@@ -28,28 +35,12 @@ func TestDefaultHTTPClientAndGetenv(t *testing.T) {
 	if transport.TLSClientConfig == nil || !transport.TLSClientConfig.InsecureSkipVerify {
 		t.Fatalf("expected TLS client config with InsecureSkipVerify, got %#v", transport.TLSClientConfig)
 	}
-
-	t.Setenv("GATEWAY_TEST_ENV", "")
-	if got := getenv("GATEWAY_TEST_ENV", "fallback"); got != "fallback" {
-		t.Fatalf("expected fallback getenv value, got %q", got)
-	}
-	t.Setenv("GATEWAY_TEST_ENV", "configured")
-	if got := getenv("GATEWAY_TEST_ENV", "fallback"); got != "configured" {
-		t.Fatalf("expected configured getenv value, got %q", got)
-	}
-}
-
-func TestMustParse(t *testing.T) {
-	parsed := mustParse("https://example.com/base")
-	if parsed.Scheme != "https" || parsed.Host != "example.com" || parsed.Path != "/base" {
-		t.Fatalf("unexpected parsed URL: %#v", parsed)
-	}
 }
 
 func TestRunReturnsBootstrapFailures(t *testing.T) {
 	t.Run("policy failure", func(t *testing.T) {
 		openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodGet || r.URL.Path != "/_plugins/_ism/policies/"+ismPolicyID {
+			if r.Method != http.MethodGet || r.URL.Path != "/_plugins/_ism/policies/"+opensearchpkg.DefaultISMPolicyID {
 				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 			}
 			http.Error(w, `{"error":"policy lookup failed"}`, http.StatusInternalServerError)
@@ -72,12 +63,12 @@ func TestRunReturnsBootstrapFailures(t *testing.T) {
 	t.Run("template failure", func(t *testing.T) {
 		openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch r.Method + " " + r.URL.Path {
-			case "GET /_plugins/_ism/policies/" + ismPolicyID:
+			case "GET /_plugins/_ism/policies/" + opensearchpkg.DefaultISMPolicyID:
 				http.NotFound(w, r)
-			case "PUT /_plugins/_ism/policies/" + ismPolicyID:
+			case "PUT /_plugins/_ism/policies/" + opensearchpkg.DefaultISMPolicyID:
 				w.WriteHeader(http.StatusCreated)
 				_, _ = io.WriteString(w, `{}`)
-			case "PUT /_index_template/" + indexTemplateName:
+			case "PUT /_index_template/" + opensearchpkg.DefaultIndexTemplateName:
 				http.Error(w, `{"error":"template failed"}`, http.StatusInternalServerError)
 			default:
 				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
@@ -100,8 +91,8 @@ func TestRunReturnsBootstrapFailures(t *testing.T) {
 }
 
 func TestGatewayRootAndDemoCoverage(t *testing.T) {
-	gateway := testGatewayHandler(Config{})
-	rawGateway := newGateway(newClient(Config{}), nil)
+	gateway := testGatewayHandler(appconfig.Config{})
+	rawGateway := newTestGateway(opensearchpkg.NewClient(appconfig.Config{}), nil)
 
 	t.Run("root head redirects", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
@@ -139,7 +130,7 @@ func TestGatewayRootAndDemoCoverage(t *testing.T) {
 	t.Run("demo path not found", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodGet, "/demo/nope", nil)
-		rawGateway.handleDemo(recorder, request)
+		rawGateway.Handler().ServeHTTP(recorder, request)
 
 		if recorder.Code != http.StatusNotFound {
 			t.Fatalf("expected status 404, got %d", recorder.Code)
@@ -149,7 +140,7 @@ func TestGatewayRootAndDemoCoverage(t *testing.T) {
 	t.Run("login path not found", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodGet, "/login/nope", nil)
-		rawGateway.handleLogin(recorder, request)
+		rawGateway.Handler().ServeHTTP(recorder, request)
 
 		if recorder.Code != http.StatusNotFound {
 			t.Fatalf("expected status 404, got %d", recorder.Code)
@@ -158,8 +149,8 @@ func TestGatewayRootAndDemoCoverage(t *testing.T) {
 }
 
 func TestGatewayLogoutCoverage(t *testing.T) {
-	gateway := testGatewayHandler(Config{})
-	rawGateway := newGateway(newClient(Config{}), nil)
+	gateway := testGatewayHandler(appconfig.Config{})
+	rawGateway := newTestGateway(opensearchpkg.NewClient(appconfig.Config{}), nil)
 
 	t.Run("logout wrong method", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
@@ -177,7 +168,7 @@ func TestGatewayLogoutCoverage(t *testing.T) {
 	t.Run("logout dangling cookie still redirects", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodPost, "/logout", nil)
-		request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "dangling"})
+		request.AddCookie(&http.Cookie{Name: serverpkg.SessionCookieName, Value: "dangling"})
 		gateway.ServeHTTP(recorder, request)
 
 		if recorder.Code != http.StatusSeeOther {
@@ -191,7 +182,7 @@ func TestGatewayLogoutCoverage(t *testing.T) {
 	t.Run("logout path not found", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodPost, "/logout/nope", nil)
-		rawGateway.handleLogout(recorder, request)
+		rawGateway.Handler().ServeHTTP(recorder, request)
 
 		if recorder.Code != http.StatusNotFound {
 			t.Fatalf("expected status 404, got %d", recorder.Code)
@@ -201,10 +192,10 @@ func TestGatewayLogoutCoverage(t *testing.T) {
 
 func TestGatewayDashboardsCoverage(t *testing.T) {
 	t.Run("path not found", func(t *testing.T) {
-		gateway := newGateway(newClient(Config{}), nil)
+		gateway := newTestGateway(opensearchpkg.NewClient(appconfig.Config{}), nil)
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodGet, "/dashboards-nope", nil)
-		gateway.handleDashboards(recorder, request)
+		gateway.HandleDashboards(recorder, request)
 
 		if recorder.Code != http.StatusNotFound {
 			t.Fatalf("expected status 404, got %d", recorder.Code)
@@ -212,15 +203,15 @@ func TestGatewayDashboardsCoverage(t *testing.T) {
 	})
 
 	t.Run("proxy error returns bad gateway", func(t *testing.T) {
-		gateway := newGateway(newClient(Config{DashboardsURL: "://bad"}), nil)
-		encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, sessionData{
-			User:       &User{Name: "alice"},
-			AuthHeader: buildBasicAuthorization("alice", "secret"),
+		gateway := newTestGateway(opensearchpkg.NewClient(appconfig.Config{DashboardsURL: "://bad"}), nil)
+		encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, serverpkg.Session{
+			User:       &authzpkg.User{Name: "alice"},
+			AuthHeader: serverpkg.BuildBasicAuthorization("alice", "secret"),
 		})
 
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodGet, "/dashboards", nil)
-		request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: encoded, Expires: expiresAt})
+		request.AddCookie(&http.Cookie{Name: serverpkg.SessionCookieName, Value: encoded, Expires: expiresAt})
 		gateway.Handler().ServeHTTP(recorder, request)
 
 		if recorder.Code != http.StatusBadGateway {
@@ -231,7 +222,7 @@ func TestGatewayDashboardsCoverage(t *testing.T) {
 
 func TestHandleLoginSubmitCoverage(t *testing.T) {
 	t.Run("parse form failure", func(t *testing.T) {
-		gateway := testGatewayHandler(Config{})
+		gateway := testGatewayHandler(appconfig.Config{})
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodPost, "/login", io.NopCloser(errorReader{err: errors.New("read failed")}))
 		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -263,8 +254,8 @@ func TestHandleLoginSubmitCoverage(t *testing.T) {
 		}))
 		defer dashboards.Close()
 
-		gateway := testGatewayHandlerWithAuth(testConfigWithDashboards(openSearch, dashboards), func(username, _ string) (*User, []Access, error) {
-			return &User{Name: username, Namespace: "team1"}, []Access{
+		gateway := testGatewayHandlerWithAuth(testConfigWithDashboards(openSearch, dashboards), func(username, _ string) (*authzpkg.User, []authzpkg.Access, error) {
+			return &authzpkg.User{Name: username, Namespace: "team1"}, []authzpkg.Access{
 				{Group: "team1_rw", Namespace: "team1"},
 			}, nil
 		})
@@ -284,19 +275,16 @@ func TestHandleLoginSubmitCoverage(t *testing.T) {
 }
 
 func TestRenderLoginPageWriterFailure(_ *testing.T) {
-	gateway := testGatewayHandler(Config{}).(*http.ServeMux)
-	_ = gateway
-
 	writer := &failingResponseWriter{header: make(http.Header)}
-	newGateway(newClient(Config{}), nil).renderLoginPage(writer, http.StatusOK, loginPageData{Username: "alice"})
+	newTestGateway(opensearchpkg.NewClient(appconfig.Config{}), nil).RenderLoginPage(writer, http.StatusOK, serverpkg.LoginPageData{Username: "alice"})
 }
 
 func TestDecodeJSONObjectCoverage(t *testing.T) {
-	if _, err := decodeJSONObject(strings.NewReader("")); err == nil || err.Error() != "request body must be a JSON object" {
+	if _, err := ingestpkg.DecodeJSONObject(strings.NewReader("")); err == nil || err.Error() != "request body must be a JSON object" {
 		t.Fatalf("expected empty-body decode error, got %v", err)
 	}
 
-	if _, err := decodeJSONObject(strings.NewReader(`{} {}`)); err == nil || !strings.Contains(err.Error(), "single JSON object") {
+	if _, err := ingestpkg.DecodeJSONObject(strings.NewReader(`{} {}`)); err == nil || !strings.Contains(err.Error(), "single JSON object") {
 		t.Fatalf("expected trailing-json decode error, got %v", err)
 	}
 }
@@ -304,7 +292,7 @@ func TestDecodeJSONObjectCoverage(t *testing.T) {
 //nolint:gocognit,funlen // Coverage subtests intentionally collect security helper edge cases.
 func TestProvisionAndSecurityHelpersCoverage(t *testing.T) {
 	t.Run("provision login user without access", func(t *testing.T) {
-		client := newClient(Config{})
+		client := opensearchpkg.NewClient(appconfig.Config{})
 		if err := client.ProvisionLoginUser(context.Background(), "alice", "secret", nil); err == nil {
 			t.Fatal("expected missing-access error")
 		}
@@ -319,8 +307,8 @@ func TestProvisionAndSecurityHelpersCoverage(t *testing.T) {
 		}))
 		defer openSearch.Close()
 
-		client := newClient(testConfig(openSearch))
-		err := client.ProvisionLoginUser(context.Background(), "alice", "secret", []Access{
+		client := opensearchpkg.NewClient(testConfig(openSearch))
+		err := client.ProvisionLoginUser(context.Background(), "alice", "secret", []authzpkg.Access{
 			{Group: "bad_rw", Namespace: "bad.namespace"},
 		})
 		if err == nil || !strings.Contains(err.Error(), "cannot be mapped") {
@@ -335,8 +323,8 @@ func TestProvisionAndSecurityHelpersCoverage(t *testing.T) {
 		}))
 		defer openSearch.Close()
 
-		client := newClient(testConfig(openSearch))
-		if err := client.ensureInternalUserWritable(context.Background(), "alice"); err != nil {
+		client := opensearchpkg.NewClient(testConfig(openSearch))
+		if err := client.EnsureInternalUserWritable(context.Background(), "alice"); err != nil {
 			t.Fatalf("expected nil error, got %v", err)
 		}
 	})
@@ -348,9 +336,9 @@ func TestProvisionAndSecurityHelpersCoverage(t *testing.T) {
 		}))
 		defer openSearch.Close()
 
-		client := newClient(testConfig(openSearch))
-		err := client.ensureInternalUserWritable(context.Background(), "alice")
-		if !errors.Is(err, errReservedInternalUser) {
+		client := opensearchpkg.NewClient(testConfig(openSearch))
+		err := client.EnsureInternalUserWritable(context.Background(), "alice")
+		if !errors.Is(err, opensearchpkg.ErrReservedInternalUser) {
 			t.Fatalf("expected reserved/hidden error, got %v", err)
 		}
 	})
@@ -361,8 +349,8 @@ func TestProvisionAndSecurityHelpersCoverage(t *testing.T) {
 		}))
 		defer openSearch.Close()
 
-		client := newClient(testConfig(openSearch))
-		if err := client.EnsureSecurityRole(context.Background(), "gateway_team1_rw", Access{Namespace: "team1"}); err == nil {
+		client := opensearchpkg.NewClient(testConfig(openSearch))
+		if err := client.EnsureSecurityRole(context.Background(), "gateway_team1_rw", authzpkg.Access{Namespace: "team1"}); err == nil {
 			t.Fatal("expected EnsureSecurityRole to fail")
 		}
 	})
@@ -376,7 +364,7 @@ func TestProvisionAndSecurityHelpersCoverage(t *testing.T) {
 		}))
 		defer openSearch.Close()
 
-		client := newClient(testConfig(openSearch))
+		client := opensearchpkg.NewClient(testConfig(openSearch))
 		if err := client.UpsertInternalUser(context.Background(), "alice", "secret", []string{"kibana_user"}, []string{"team1_rw"}, []string{"team1"}); err != nil {
 			t.Fatalf("UpsertInternalUser returned error: %v", err)
 		}
@@ -392,7 +380,7 @@ func TestProvisionAndSecurityHelpersCoverage(t *testing.T) {
 //nolint:gocognit,cyclop,funlen // Coverage subtests intentionally group related dashboard client branches.
 func TestTenantAndDashboardsClientCoverage(t *testing.T) {
 	t.Run("ensure tenant without dashboards url is noop", func(t *testing.T) {
-		client := newClient(Config{})
+		client := opensearchpkg.NewClient(appconfig.Config{})
 		if err := client.EnsureTenant(context.Background(), "orders"); err != nil {
 			t.Fatalf("expected nil error, got %v", err)
 		}
@@ -406,8 +394,8 @@ func TestTenantAndDashboardsClientCoverage(t *testing.T) {
 
 		cfg := testConfig(openSearch)
 		cfg.DashboardsURL = "http://dashboards.example"
-		client := newClient(cfg)
-		client.ensuredTenants.Store("orders", true)
+		client := opensearchpkg.NewClient(cfg)
+		client.EnsuredTenants.Store("orders", true)
 
 		if err := client.EnsureTenant(context.Background(), "orders"); err != nil {
 			t.Fatalf("expected nil error, got %v", err)
@@ -415,7 +403,7 @@ func TestTenantAndDashboardsClientCoverage(t *testing.T) {
 	})
 
 	t.Run("ensure dashboard data view without dashboards url is noop", func(t *testing.T) {
-		client := newClient(Config{})
+		client := opensearchpkg.NewClient(appconfig.Config{})
 		if err := client.EnsureDashboardDataView(context.Background(), "orders", "orders"); err != nil {
 			t.Fatalf("expected nil error, got %v", err)
 		}
@@ -434,8 +422,8 @@ func TestTenantAndDashboardsClientCoverage(t *testing.T) {
 
 		cfg := testConfig(openSearch)
 		cfg.DashboardsURL = "http://dashboards.example"
-		client := newClient(cfg)
-		client.ensuredDataViews.Store("orders/"+buildDataViewID("orders"), true)
+		client := opensearchpkg.NewClient(cfg)
+		client.EnsuredDataViews.Store("orders/"+opensearchpkg.BuildDataViewID("orders"), true)
 
 		if err := client.EnsureDashboardDataView(context.Background(), "orders", "orders"); err != nil {
 			t.Fatalf("expected nil error, got %v", err)
@@ -448,13 +436,13 @@ func TestTenantAndDashboardsClientCoverage(t *testing.T) {
 		}))
 		defer dashboards.Close()
 
-		client := newClient(Config{
+		client := opensearchpkg.NewClient(appconfig.Config{
 			DashboardsURL:      dashboards.URL,
 			DashboardsUsername: "admin",
 			DashboardsPassword: "secret",
 			HTTPClient:         dashboards.Client(),
 		})
-		err := client.setDashboardsDefaultIndex(context.Background(), "team1", buildDataViewID("team1"))
+		err := client.SetDashboardsDefaultIndex(context.Background(), "team1", opensearchpkg.BuildDataViewID("team1"))
 		if err == nil || !strings.Contains(err.Error(), `tenant "team1"`) {
 			t.Fatalf("expected tenant-scoped default index error, got %v", err)
 		}
@@ -472,13 +460,13 @@ func TestTenantAndDashboardsClientCoverage(t *testing.T) {
 		}))
 		defer dashboards.Close()
 
-		client := newClient(Config{
+		client := opensearchpkg.NewClient(appconfig.Config{
 			DashboardsURL:      dashboards.URL,
 			DashboardsUsername: "admin",
 			DashboardsPassword: "secret",
 			HTTPClient:         dashboards.Client(),
 		})
-		if err := client.SetDashboardsDefaultIndexIfMissing(context.Background(), "team1", buildDataViewID("team1-demo")); err != nil {
+		if err := client.SetDashboardsDefaultIndexIfMissing(context.Background(), "team1", opensearchpkg.BuildDataViewID("team1-demo")); err != nil {
 			t.Fatalf("SetDashboardsDefaultIndexIfMissing returned error: %v", err)
 		}
 		if !reflect.DeepEqual(calls, []string{"GET /dashboards/api/opensearch-dashboards/settings/defaultIndex"}) {
@@ -505,13 +493,13 @@ func TestTenantAndDashboardsClientCoverage(t *testing.T) {
 		}))
 		defer dashboards.Close()
 
-		client := newClient(Config{
+		client := opensearchpkg.NewClient(appconfig.Config{
 			DashboardsURL:      dashboards.URL,
 			DashboardsUsername: "admin",
 			DashboardsPassword: "secret",
 			HTTPClient:         dashboards.Client(),
 		})
-		if err := client.SetDashboardsDefaultIndexIfMissing(context.Background(), "team1", buildDataViewID("team1-demo")); err != nil {
+		if err := client.SetDashboardsDefaultIndexIfMissing(context.Background(), "team1", opensearchpkg.BuildDataViewID("team1-demo")); err != nil {
 			t.Fatalf("SetDashboardsDefaultIndexIfMissing returned error: %v", err)
 		}
 		if !reflect.DeepEqual(calls, []string{
@@ -520,7 +508,7 @@ func TestTenantAndDashboardsClientCoverage(t *testing.T) {
 		}) {
 			t.Fatalf("unexpected default-index calls: %#v", calls)
 		}
-		if got := body["value"]; got != buildDataViewID("team1-demo") {
+		if got := body["value"]; got != opensearchpkg.BuildDataViewID("team1-demo") {
 			t.Fatalf("unexpected default-index body: %#v", body)
 		}
 	})
@@ -539,14 +527,14 @@ func TestTenantAndDashboardsClientCoverage(t *testing.T) {
 		}))
 		defer dashboards.Close()
 
-		client := newClient(Config{
+		client := opensearchpkg.NewClient(appconfig.Config{
 			DashboardsURL:      dashboards.URL,
 			DashboardsUsername: "admin",
 			DashboardsPassword: "secret",
 			DashboardsTenant:   "admin_tenant",
 			HTTPClient:         dashboards.Client(),
 		})
-		if err := client.doDashboardsJSON(context.Background(), http.MethodPost, "/api/test", map[string]any{"hello": "world"}, nil, []int{http.StatusOK}); err != nil {
+		if err := client.DoDashboardsJSON(context.Background(), http.MethodPost, "/api/test", map[string]any{"hello": "world"}, nil, []int{http.StatusOK}); err != nil {
 			t.Fatalf("doDashboardsJSON returned error: %v", err)
 		}
 		if sawTenant != "admin_tenant" {
@@ -558,12 +546,12 @@ func TestTenantAndDashboardsClientCoverage(t *testing.T) {
 	})
 
 	t.Run("new dashboards request without tenant header when empty", func(t *testing.T) {
-		client := newClient(Config{
+		client := opensearchpkg.NewClient(appconfig.Config{
 			DashboardsURL:      "http://dashboards.example",
 			DashboardsUsername: "admin",
 			DashboardsPassword: "secret",
 		})
-		req, err := client.newDashboardsRequest(context.Background(), http.MethodGet, "api/test", nil)
+		req, err := client.NewDashboardsRequest(context.Background(), http.MethodGet, "api/test", nil)
 		if err != nil {
 			t.Fatalf("newDashboardsRequest returned error: %v", err)
 		}
@@ -583,21 +571,21 @@ func TestClientHelperCoverage(t *testing.T) {
 		}))
 		defer openSearch.Close()
 
-		client := newClient(testConfig(openSearch))
-		_, err := client.aliasExists(context.Background(), "orders-20241230-rollover")
+		client := opensearchpkg.NewClient(testConfig(openSearch))
+		_, err := client.AliasExists(context.Background(), "orders-20241230-rollover")
 		if err == nil {
 			t.Fatal("expected aliasExists to fail")
 		}
 
-		var responseErr *ResponseError
+		var responseErr *opensearchpkg.ResponseError
 		if !errors.As(err, &responseErr) || responseErr.StatusCode != http.StatusInternalServerError {
 			t.Fatalf("expected response error with status 500, got %v", err)
 		}
 	})
 
 	t.Run("do json with request returns marshal error", func(t *testing.T) {
-		client := newClient(Config{HTTPClient: http.DefaultClient})
-		err := client.doJSONWithRequest(context.Background(), http.MethodPost, "/broken", map[string]any{"bad": make(chan int)}, nil, []int{http.StatusOK}, func(_ context.Context, _, _ string, _ io.Reader) (*http.Request, error) {
+		client := opensearchpkg.NewClient(appconfig.Config{HTTPClient: http.DefaultClient})
+		err := client.DoJSONWithRequest(context.Background(), http.MethodPost, "/broken", map[string]any{"bad": make(chan int)}, nil, []int{http.StatusOK}, func(_ context.Context, _, _ string, _ io.Reader) (*http.Request, error) {
 			t.Fatal("request builder should not be called when json marshal fails")
 			return nil, nil
 		})
@@ -607,9 +595,9 @@ func TestClientHelperCoverage(t *testing.T) {
 	})
 
 	t.Run("do json with request returns builder error", func(t *testing.T) {
-		client := newClient(Config{HTTPClient: http.DefaultClient})
+		client := opensearchpkg.NewClient(appconfig.Config{HTTPClient: http.DefaultClient})
 		wantErr := errors.New("build failed")
-		err := client.doJSONWithRequest(context.Background(), http.MethodGet, "/broken", nil, nil, []int{http.StatusOK}, func(_ context.Context, _, _ string, _ io.Reader) (*http.Request, error) {
+		err := client.DoJSONWithRequest(context.Background(), http.MethodGet, "/broken", nil, nil, []int{http.StatusOK}, func(_ context.Context, _, _ string, _ io.Reader) (*http.Request, error) {
 			return nil, wantErr
 		})
 		if !errors.Is(err, wantErr) {
@@ -620,13 +608,13 @@ func TestClientHelperCoverage(t *testing.T) {
 
 func TestDashboardsHelperCoverage(t *testing.T) {
 	t.Run("dashboards helper functions", func(t *testing.T) {
-		if got := dashboardsAPIPath("/dashboards"); got != "/dashboards" {
+		if got := opensearchpkg.DashboardsAPIPath("/dashboards"); got != "/dashboards" {
 			t.Fatalf("unexpected dashboards path: %q", got)
 		}
-		if got := dashboardsAPIPath("/api/test"); got != "/dashboards/api/test" {
+		if got := opensearchpkg.DashboardsAPIPath("/api/test"); got != "/dashboards/api/test" {
 			t.Fatalf("unexpected dashboards path: %q", got)
 		}
-		if got := dashboardsAPIPath("api/test"); got != "/dashboards/api/test" {
+		if got := opensearchpkg.DashboardsAPIPath("api/test"); got != "/dashboards/api/test" {
 			t.Fatalf("unexpected dashboards path: %q", got)
 		}
 	})
@@ -634,7 +622,7 @@ func TestDashboardsHelperCoverage(t *testing.T) {
 
 func TestDecodeAndSessionHelpersCoverage(t *testing.T) {
 	t.Run("secure cookie max age matches browser cookie", func(t *testing.T) {
-		gateway := newGateway(newClient(Config{}), nil)
+		gateway := newTestGateway(opensearchpkg.NewClient(appconfig.Config{}), nil)
 		maxAge := reflect.ValueOf(gateway.SecureCookie).Elem().FieldByName("maxAge").Int()
 		if maxAge != 86400 {
 			t.Fatalf("expected securecookie server-side max age to be 86400 seconds, got %d", maxAge)
@@ -642,19 +630,19 @@ func TestDecodeAndSessionHelpersCoverage(t *testing.T) {
 	})
 
 	t.Run("forwarded proto handles https", func(t *testing.T) {
-		if got := forwardedProto(httptest.NewRequest(http.MethodGet, "http://example.com", nil)); got != "http" {
+		if got := serverpkg.ForwardedProto(httptest.NewRequest(http.MethodGet, "http://example.com", nil)); got != "http" {
 			t.Fatalf("expected http proto, got %q", got)
 		}
 		req := httptest.NewRequest(http.MethodGet, "https://example.com", nil)
 		req.TLS = &tls.ConnectionState{}
-		if got := forwardedProto(req); got != "https" {
+		if got := serverpkg.ForwardedProto(req); got != "https" {
 			t.Fatalf("expected https proto, got %q", got)
 		}
 	})
 }
 
 func TestAccessGroupNamesAndRetryableConflict(t *testing.T) {
-	names := accessGroupNames([]Access{
+	names := authzpkg.AccessGroupNames([]authzpkg.Access{
 		{Group: "team1_rw"},
 		{Group: ""},
 		{Group: "team1_rw"},
@@ -664,10 +652,10 @@ func TestAccessGroupNamesAndRetryableConflict(t *testing.T) {
 		t.Fatalf("unexpected deduped group names: %#v", names)
 	}
 
-	if !isRetryableBootstrapConflict(&ResponseError{StatusCode: http.StatusBadRequest, Body: `{"error":{"type":"resource_already_exists_exception"}}`}) {
+	if !opensearchpkg.IsRetryableBootstrapConflict(&opensearchpkg.ResponseError{StatusCode: http.StatusBadRequest, Body: `{"error":{"type":"resource_already_exists_exception"}}`}) {
 		t.Fatal("expected 400 resource_already_exists_exception to be retryable")
 	}
-	if isRetryableBootstrapConflict(errors.New("plain error")) {
+	if opensearchpkg.IsRetryableBootstrapConflict(errors.New("plain error")) {
 		t.Fatal("expected plain error not to be retryable")
 	}
 }

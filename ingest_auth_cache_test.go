@@ -10,6 +10,12 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	authzpkg "github.com/define42/opensearchgateway/internal/authz"
+	ingestpkg "github.com/define42/opensearchgateway/internal/ingest"
+	ldappkg "github.com/define42/opensearchgateway/internal/ldap"
+	opensearchpkg "github.com/define42/opensearchgateway/internal/opensearch"
+	serverpkg "github.com/define42/opensearchgateway/internal/server"
 )
 
 //nolint:cyclop // Cache behavior test keeps the hit, miss, and expiry assertions together.
@@ -17,15 +23,15 @@ func TestIngestAuthCacheCachesSuccessfulLookups(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, time.April, 8, 12, 0, 0, 0, time.UTC)
-	cache := newIngestAuthCache()
+	cache := ingestpkg.NewAuthCache()
 	cache.SetNow(func() time.Time { return now })
 
 	lookups := 0
-	key := ingestAuthCacheKey("ingestuser", "dogood")
+	key := ingestpkg.AuthCacheKey("ingestuser", "dogood")
 
-	username, access, cached, err := cache.Resolve(key, func() (string, []Access, error) {
+	username, access, cached, err := cache.Resolve(key, func() (string, []authzpkg.Access, error) {
 		lookups++
-		return "ingestuser", []Access{{Group: "team10_rw", Namespace: "team10"}}, nil
+		return "ingestuser", []authzpkg.Access{{Group: "team10_rw", Namespace: "team10"}}, nil
 	})
 	if err != nil {
 		t.Fatalf("Resolve returned error: %v", err)
@@ -40,7 +46,7 @@ func TestIngestAuthCacheCachesSuccessfulLookups(t *testing.T) {
 	access[0].Namespace = "mutated"
 	now = now.Add(30 * time.Second)
 
-	username, access, cached, err = cache.Resolve(key, func() (string, []Access, error) {
+	username, access, cached, err = cache.Resolve(key, func() (string, []authzpkg.Access, error) {
 		lookups++
 		return "wrong", nil, nil
 	})
@@ -67,24 +73,24 @@ func TestIngestAuthCacheExpiresEntries(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, time.April, 8, 12, 0, 0, 0, time.UTC)
-	cache := newIngestAuthCache()
+	cache := ingestpkg.NewAuthCache()
 	cache.SetNow(func() time.Time { return now })
 
 	lookups := 0
-	key := ingestAuthCacheKey("ingestuser", "dogood")
+	key := ingestpkg.AuthCacheKey("ingestuser", "dogood")
 
-	if _, _, _, err := cache.Resolve(key, func() (string, []Access, error) {
+	if _, _, _, err := cache.Resolve(key, func() (string, []authzpkg.Access, error) {
 		lookups++
-		return "ingestuser", []Access{{Group: "team10_rw", Namespace: "team10"}}, nil
+		return "ingestuser", []authzpkg.Access{{Group: "team10_rw", Namespace: "team10"}}, nil
 	}); err != nil {
 		t.Fatalf("Resolve returned error: %v", err)
 	}
 
-	now = now.Add(ingestAuthCacheTTL + time.Second)
+	now = now.Add(ingestpkg.CacheTTL + time.Second)
 
-	_, _, cached, err := cache.Resolve(key, func() (string, []Access, error) {
+	_, _, cached, err := cache.Resolve(key, func() (string, []authzpkg.Access, error) {
 		lookups++
-		return "ingestuser", []Access{{Group: "team10_rw", Namespace: "team10"}}, nil
+		return "ingestuser", []authzpkg.Access{{Group: "team10_rw", Namespace: "team10"}}, nil
 	})
 	if err != nil {
 		t.Fatalf("Resolve returned error after expiry: %v", err)
@@ -106,8 +112,8 @@ func TestIngestAuthCacheExpiresEntries(t *testing.T) {
 func TestIngestAuthCacheDeduplicatesConcurrentMisses(t *testing.T) {
 	t.Parallel()
 
-	cache := newIngestAuthCache()
-	key := ingestAuthCacheKey("ingestuser", "dogood")
+	cache := ingestpkg.NewAuthCache()
+	key := ingestpkg.AuthCacheKey("ingestuser", "dogood")
 
 	var lookups atomic.Int32
 	started := make(chan struct{}, 1)
@@ -121,12 +127,12 @@ func TestIngestAuthCacheDeduplicatesConcurrentMisses(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			username, access, _, err := cache.Resolve(key, func() (string, []Access, error) {
+			username, access, _, err := cache.Resolve(key, func() (string, []authzpkg.Access, error) {
 				if lookups.Add(1) == 1 {
 					started <- struct{}{}
 				}
 				<-release
-				return "ingestuser", []Access{{Group: "team10_rw", Namespace: "team10"}}, nil
+				return "ingestuser", []authzpkg.Access{{Group: "team10_rw", Namespace: "team10"}}, nil
 			})
 			if err != nil {
 				errCh <- err
@@ -185,9 +191,9 @@ func TestGatewayIngestBasicAuthUsesLDAPCache(t *testing.T) {
 	defer openSearch.Close()
 
 	var authCalls atomic.Int32
-	gateway := newGateway(newClient(testConfig(openSearch)), func(username, _ string) (*User, []Access, error) {
+	gateway := newTestGateway(opensearchpkg.NewClient(testConfig(openSearch)), func(username, _ string) (*authzpkg.User, []authzpkg.Access, error) {
 		authCalls.Add(1)
-		return &User{Name: username, Namespace: "team10"}, []Access{
+		return &authzpkg.User{Name: username, Namespace: "team10"}, []authzpkg.Access{
 			{Group: "team10_rw", Namespace: "team10"},
 		}, nil
 	})
@@ -205,7 +211,7 @@ func TestGatewayIngestBasicAuthUsesLDAPCache(t *testing.T) {
 			t.Fatalf("expected status 201, got %d: %s", recorder.Code, recorder.Body.String())
 		}
 
-		var response ingestResponse
+		var response serverpkg.IngestResponse
 		if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 			t.Fatalf("decode response: %v", err)
 		}
@@ -221,7 +227,7 @@ func TestGatewayIngestBasicAuthUsesLDAPCache(t *testing.T) {
 		t.Fatalf("expected first write to repair policy and both writes to index, got %#v", calls)
 	}
 
-	stats := gateway.ingestAuthCache.Stats()
+	stats := gateway.IngestAuthCache.Stats()
 	if stats.Hits != 1 || stats.Misses != 1 || stats.Expired != 0 || stats.Entries != 1 {
 		t.Fatalf("unexpected gateway cache stats: %+v", stats)
 	}
@@ -230,12 +236,12 @@ func TestGatewayIngestBasicAuthUsesLDAPCache(t *testing.T) {
 func TestIngestAuthCacheForgetUserEvictsEntries(t *testing.T) {
 	t.Parallel()
 
-	cache := newIngestAuthCache()
+	cache := ingestpkg.NewAuthCache()
 
 	resolve := func(username, password, namespace string) {
-		key := ingestAuthCacheKey(username, password)
-		if _, _, _, err := cache.Resolve(key, func() (string, []Access, error) {
-			return username, []Access{{Group: namespace + "_rw", Namespace: namespace}}, nil
+		key := ingestpkg.AuthCacheKey(username, password)
+		if _, _, _, err := cache.Resolve(key, func() (string, []authzpkg.Access, error) {
+			return username, []authzpkg.Access{{Group: namespace + "_rw", Namespace: namespace}}, nil
 		}); err != nil {
 			t.Fatalf("Resolve(%q): %v", username, err)
 		}
@@ -256,7 +262,7 @@ func TestIngestAuthCacheForgetUserEvictsEntries(t *testing.T) {
 		t.Fatalf("expected 1 entry after forgetting alice, got %d", stats.Entries)
 	}
 
-	_, _, cached, err := cache.Resolve(ingestAuthCacheKey("bob", "p1"), func() (string, []Access, error) {
+	_, _, cached, err := cache.Resolve(ingestpkg.AuthCacheKey("bob", "p1"), func() (string, []authzpkg.Access, error) {
 		t.Fatal("bob's entry should still be cached")
 		return "", nil, nil
 	})
@@ -273,31 +279,31 @@ func TestGatewayLogoutEvictsIngestAuthCache(t *testing.T) {
 	}))
 	defer openSearch.Close()
 
-	gateway := newGateway(newClient(testConfig(openSearch)), func(username, _ string) (*User, []Access, error) {
-		return &User{Name: username}, []Access{{Group: "team10_rw", Namespace: "team10"}}, nil
+	gateway := newTestGateway(opensearchpkg.NewClient(testConfig(openSearch)), func(username, _ string) (*authzpkg.User, []authzpkg.Access, error) {
+		return &authzpkg.User{Name: username}, []authzpkg.Access{{Group: "team10_rw", Namespace: "team10"}}, nil
 	})
 
-	if _, _, _, err := gateway.ingestAuthCache.Resolve(ingestAuthCacheKey("ingestuser", "dogood"), func() (string, []Access, error) {
-		return "ingestuser", []Access{{Group: "team10_rw", Namespace: "team10"}}, nil
+	if _, _, _, err := gateway.IngestAuthCache.Resolve(ingestpkg.AuthCacheKey("ingestuser", "dogood"), func() (string, []authzpkg.Access, error) {
+		return "ingestuser", []authzpkg.Access{{Group: "team10_rw", Namespace: "team10"}}, nil
 	}); err != nil {
 		t.Fatalf("seed cache: %v", err)
 	}
 
-	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, sessionData{
-		User:       &User{Name: "ingestuser"},
-		AuthHeader: buildBasicAuthorization("ingestuser", "dogood"),
+	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, serverpkg.Session{
+		User:       &authzpkg.User{Name: "ingestuser"},
+		AuthHeader: serverpkg.BuildBasicAuthorization("ingestuser", "dogood"),
 	})
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/logout", nil)
-	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: encoded, Expires: expiresAt})
+	request.AddCookie(&http.Cookie{Name: serverpkg.SessionCookieName, Value: encoded, Expires: expiresAt})
 
 	gateway.Handler().ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusSeeOther {
 		t.Fatalf("expected logout redirect, got %d", recorder.Code)
 	}
-	if got := gateway.ingestAuthCache.Stats().Entries; got != 0 {
+	if got := gateway.IngestAuthCache.Stats().Entries; got != 0 {
 		t.Fatalf("expected ingest auth cache entries to be cleared after logout, got %d", got)
 	}
 }
@@ -311,9 +317,9 @@ func TestGatewayIngestBasicAuthDoesNotCacheAuthenticationErrors(t *testing.T) {
 	defer openSearch.Close()
 
 	var authCalls atomic.Int32
-	gateway := newGateway(newClient(testConfig(openSearch)), func(_, _ string) (*User, []Access, error) {
+	gateway := newTestGateway(opensearchpkg.NewClient(testConfig(openSearch)), func(_, _ string) (*authzpkg.User, []authzpkg.Access, error) {
 		authCalls.Add(1)
-		return nil, nil, errLDAPInvalidCredentials
+		return nil, nil, ldappkg.ErrInvalidCredentials
 	})
 
 	handler := gateway.Handler()
@@ -334,7 +340,7 @@ func TestGatewayIngestBasicAuthDoesNotCacheAuthenticationErrors(t *testing.T) {
 		t.Fatalf("expected failed LDAP auth to be retried twice, got %d", got)
 	}
 
-	stats := gateway.ingestAuthCache.Stats()
+	stats := gateway.IngestAuthCache.Stats()
 	if stats.Hits != 0 || stats.Misses != 2 || stats.Expired != 0 || stats.Entries != 0 {
 		t.Fatalf("unexpected gateway cache stats after failures: %+v", stats)
 	}

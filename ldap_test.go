@@ -5,6 +5,10 @@ import (
 	"net"
 	"testing"
 	"time"
+
+	authzpkg "github.com/define42/opensearchgateway/internal/authz"
+	appconfig "github.com/define42/opensearchgateway/internal/config"
+	ldappkg "github.com/define42/opensearchgateway/internal/ldap"
 )
 
 //nolint:funlen // Table-driven LDAP permission cases are easier to audit in one table.
@@ -65,10 +69,10 @@ func TestPermissionsFromGroup(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			gotNamespace, gotPullOnly, gotDelete, gotOK := permissionsFromGroup(tt.group)
+			gotNamespace, gotPullOnly, gotDelete, gotOK := ldappkg.PermissionsFromGroup(tt.group)
 			if gotNamespace != tt.wantNamespace || gotPullOnly != tt.wantPullOnly || gotDelete != tt.wantDelete || gotOK != tt.wantOK {
 				t.Fatalf(
-					"permissionsFromGroup(%q) = (%q, %t, %t, %t), want (%q, %t, %t, %t)",
+					"ldappkg.PermissionsFromGroup(%q) = (%q, %t, %t, %t), want (%q, %t, %t, %t)",
 					tt.group,
 					gotNamespace,
 					gotPullOnly,
@@ -100,8 +104,8 @@ func TestGroupNameFromDN(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := groupNameFromDN(tt.dn); got != tt.want {
-				t.Fatalf("groupNameFromDN(%q) = %q, want %q", tt.dn, got, tt.want)
+			if got := ldappkg.GroupNameFromDN(tt.dn); got != tt.want {
+				t.Fatalf("ldappkg.GroupNameFromDN(%q) = %q, want %q", tt.dn, got, tt.want)
 			}
 		})
 	}
@@ -116,7 +120,7 @@ func TestAccessFromGroupsFiltersPrefixAndSelectsMostPermissive(t *testing.T) {
 		"cn=other_rw,ou=groups,dc=glauth,dc=com",
 	}
 
-	access, user := accessFromGroups("johndoe", groups, "team")
+	access, user := ldappkg.AccessFromGroups("johndoe", groups, "team")
 	if user == nil {
 		t.Fatal("expected selected user")
 	}
@@ -136,7 +140,7 @@ func TestAccessFromGroupsDropsHyphenedNamespace(t *testing.T) {
 		"cn=team10-special_rw,ou=groups,dc=glauth,dc=com",
 	}
 
-	access, user := accessFromGroups("johndoe", groups, "team")
+	access, user := ldappkg.AccessFromGroups("johndoe", groups, "team")
 	if user == nil || user.Namespace != "team10" {
 		t.Fatalf("expected selected user in team10, got %+v", user)
 	}
@@ -164,7 +168,7 @@ func TestDialLDAPStartTLSFailure(t *testing.T) {
 		}
 	}()
 
-	_, err = dialLDAP(LDAPConfig{
+	_, err = ldappkg.Dial(appconfig.LDAPConfig{
 		URL:            "ldap://" + listener.Addr().String(),
 		StartTLS:       true,
 		SkipTLSVerify:  true,
@@ -177,10 +181,10 @@ func TestDialLDAPStartTLSFailure(t *testing.T) {
 }
 
 func TestLDAPAuthenticateAccessUnauthorizedErrorHelpers(t *testing.T) {
-	if !errors.Is(errLDAPInvalidCredentials, errLDAPInvalidCredentials) {
+	if !errors.Is(ldappkg.ErrInvalidCredentials, ldappkg.ErrInvalidCredentials) {
 		t.Fatal("expected invalid credentials sentinel to match itself")
 	}
-	if !errors.Is(errLDAPUnauthorized, errLDAPUnauthorized) {
+	if !errors.Is(ldappkg.ErrUnauthorized, ldappkg.ErrUnauthorized) {
 		t.Fatal("expected unauthorized sentinel to match itself")
 	}
 }
@@ -190,38 +194,38 @@ func TestMorePermissive(t *testing.T) {
 
 	tests := []struct {
 		name string
-		a    *User
-		b    *User
+		a    *authzpkg.User
+		b    *authzpkg.User
 		want bool
 	}{
 		{
 			name: "delete access outranks write-only access",
-			a:    &User{Name: "a", Namespace: "team10", PullOnly: true, DeleteAllowed: true},
-			b:    &User{Name: "b", Namespace: "team10", PullOnly: false, DeleteAllowed: false},
+			a:    &authzpkg.User{Name: "a", Namespace: "team10", PullOnly: true, DeleteAllowed: true},
+			b:    &authzpkg.User{Name: "b", Namespace: "team10", PullOnly: false, DeleteAllowed: false},
 			want: true,
 		},
 		{
 			name: "write access outranks read-only access when delete is equal",
-			a:    &User{Name: "a", Namespace: "team10", PullOnly: false, DeleteAllowed: false},
-			b:    &User{Name: "b", Namespace: "team10", PullOnly: true, DeleteAllowed: false},
+			a:    &authzpkg.User{Name: "a", Namespace: "team10", PullOnly: false, DeleteAllowed: false},
+			b:    &authzpkg.User{Name: "b", Namespace: "team10", PullOnly: true, DeleteAllowed: false},
 			want: true,
 		},
 		{
 			name: "full access outranks read-delete access",
-			a:    &User{Name: "a", Namespace: "team10", PullOnly: false, DeleteAllowed: true},
-			b:    &User{Name: "b", Namespace: "team10", PullOnly: true, DeleteAllowed: true},
+			a:    &authzpkg.User{Name: "a", Namespace: "team10", PullOnly: false, DeleteAllowed: true},
+			b:    &authzpkg.User{Name: "b", Namespace: "team10", PullOnly: true, DeleteAllowed: true},
 			want: true,
 		},
 		{
 			name: "less permissive user does not outrank more permissive user",
-			a:    &User{Name: "a", Namespace: "team10", PullOnly: true, DeleteAllowed: false},
-			b:    &User{Name: "b", Namespace: "team10", PullOnly: false, DeleteAllowed: true},
+			a:    &authzpkg.User{Name: "a", Namespace: "team10", PullOnly: true, DeleteAllowed: false},
+			b:    &authzpkg.User{Name: "b", Namespace: "team10", PullOnly: false, DeleteAllowed: true},
 			want: false,
 		},
 		{
 			name: "equal permissions are not more permissive",
-			a:    &User{Name: "a", Namespace: "team10", PullOnly: false, DeleteAllowed: false},
-			b:    &User{Name: "b", Namespace: "team10", PullOnly: false, DeleteAllowed: false},
+			a:    &authzpkg.User{Name: "a", Namespace: "team10", PullOnly: false, DeleteAllowed: false},
+			b:    &authzpkg.User{Name: "b", Namespace: "team10", PullOnly: false, DeleteAllowed: false},
 			want: false,
 		},
 	}
@@ -230,8 +234,8 @@ func TestMorePermissive(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := morePermissive(tt.a, tt.b); got != tt.want {
-				t.Fatalf("morePermissive(%+v, %+v) = %t, want %t", *tt.a, *tt.b, got, tt.want)
+			if got := authzpkg.MorePermissive(tt.a, tt.b); got != tt.want {
+				t.Fatalf("authzpkg.MorePermissive(%+v, %+v) = %t, want %t", *tt.a, *tt.b, got, tt.want)
 			}
 		})
 	}

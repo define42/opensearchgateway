@@ -12,6 +12,13 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	authzpkg "github.com/define42/opensearchgateway/internal/authz"
+	appconfig "github.com/define42/opensearchgateway/internal/config"
+	ldappkg "github.com/define42/opensearchgateway/internal/ldap"
+	opensearchpkg "github.com/define42/opensearchgateway/internal/opensearch"
+	serverpkg "github.com/define42/opensearchgateway/internal/server"
 )
 
 //nolint:gocognit,funlen // Bootstrap test keeps policy/template request assertions together.
@@ -24,14 +31,14 @@ func TestRunBootstrapsBeforeServe(t *testing.T) {
 
 	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
-		case "GET /_plugins/_ism/policies/" + ismPolicyID:
+		case "GET /_plugins/_ism/policies/" + opensearchpkg.DefaultISMPolicyID:
 			calls = append(calls, "policy")
 			http.NotFound(w, r)
-		case "PUT /_plugins/_ism/policies/" + ismPolicyID:
+		case "PUT /_plugins/_ism/policies/" + opensearchpkg.DefaultISMPolicyID:
 			calls = append(calls, "policy-put")
 			policyBody = decodeRequestBody(t, r)
 			w.WriteHeader(http.StatusCreated)
-		case "PUT /_index_template/" + indexTemplateName:
+		case "PUT /_index_template/" + opensearchpkg.DefaultIndexTemplateName:
 			calls = append(calls, "template")
 			templateBody = decodeRequestBody(t, r)
 			w.WriteHeader(http.StatusCreated)
@@ -52,7 +59,7 @@ func TestRunBootstrapsBeforeServe(t *testing.T) {
 
 		template := nestedMap(t, templateBody["template"])
 		settings := nestedMap(t, template["settings"])
-		if got := settings["plugins.index_state_management.policy_id"]; got != ismPolicyID {
+		if got := settings["plugins.index_state_management.policy_id"]; got != opensearchpkg.DefaultISMPolicyID {
 			t.Fatalf("unexpected template policy id: %#v", got)
 		}
 
@@ -88,25 +95,25 @@ func TestEnsureISMPolicySkipsWhenExistingMatches(t *testing.T) {
 	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls = append(calls, r.Method+" "+r.URL.Path)
 
-		if r.Method != http.MethodGet || r.URL.Path != "/_plugins/_ism/policies/"+ismPolicyID {
+		if r.Method != http.MethodGet || r.URL.Path != "/_plugins/_ism/policies/"+opensearchpkg.DefaultISMPolicyID {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(ismPolicyResponse{
+		_ = json.NewEncoder(w).Encode(opensearchpkg.ISMPolicyResponse{
 			SeqNo:       7,
 			PrimaryTerm: 1,
-			Policy:      buildISMPolicy(100000000),
+			Policy:      opensearchpkg.BuildISMPolicy(100000000),
 		})
 	}))
 	defer openSearch.Close()
 
-	client := newClient(testConfig(openSearch))
-	if err := client.EnsureISMPolicy(context.Background(), ismPolicyID, 100000000); err != nil {
+	client := opensearchpkg.NewClient(testConfig(openSearch))
+	if err := client.EnsureISMPolicy(context.Background(), opensearchpkg.DefaultISMPolicyID, 100000000); err != nil {
 		t.Fatalf("EnsureISMPolicy returned error: %v", err)
 	}
 
-	if !reflect.DeepEqual(calls, []string{"GET /_plugins/_ism/policies/" + ismPolicyID}) {
+	if !reflect.DeepEqual(calls, []string{"GET /_plugins/_ism/policies/" + opensearchpkg.DefaultISMPolicyID}) {
 		t.Fatalf("unexpected request sequence: %#v", calls)
 	}
 }
@@ -122,18 +129,18 @@ func TestEnsureISMPolicyUpdatesWhenExistingDiffers(t *testing.T) {
 
 		switch len(calls) {
 		case 1:
-			if r.Method != http.MethodGet || r.URL.Path != "/_plugins/_ism/policies/"+ismPolicyID {
+			if r.Method != http.MethodGet || r.URL.Path != "/_plugins/_ism/policies/"+opensearchpkg.DefaultISMPolicyID {
 				t.Fatalf("unexpected first request: %s %s", r.Method, r.URL.RequestURI())
 			}
 
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(ismPolicyResponse{
+			_ = json.NewEncoder(w).Encode(opensearchpkg.ISMPolicyResponse{
 				SeqNo:       11,
 				PrimaryTerm: 2,
-				Policy:      buildISMPolicy(10),
+				Policy:      opensearchpkg.BuildISMPolicy(10),
 			})
 		case 2:
-			expectedPath := "/_plugins/_ism/policies/" + ismPolicyID + "?if_seq_no=11&if_primary_term=2"
+			expectedPath := "/_plugins/_ism/policies/" + opensearchpkg.DefaultISMPolicyID + "?if_seq_no=11&if_primary_term=2"
 			if r.Method != http.MethodPut || r.URL.RequestURI() != expectedPath {
 				t.Fatalf("unexpected second request: %s %s", r.Method, r.URL.RequestURI())
 			}
@@ -146,14 +153,14 @@ func TestEnsureISMPolicyUpdatesWhenExistingDiffers(t *testing.T) {
 	}))
 	defer openSearch.Close()
 
-	client := newClient(testConfig(openSearch))
-	if err := client.EnsureISMPolicy(context.Background(), ismPolicyID, 100000000); err != nil {
+	client := opensearchpkg.NewClient(testConfig(openSearch))
+	if err := client.EnsureISMPolicy(context.Background(), opensearchpkg.DefaultISMPolicyID, 100000000); err != nil {
 		t.Fatalf("EnsureISMPolicy returned error: %v", err)
 	}
 
 	if !reflect.DeepEqual(calls, []string{
-		"GET /_plugins/_ism/policies/" + ismPolicyID,
-		"PUT /_plugins/_ism/policies/" + ismPolicyID + "?if_seq_no=11&if_primary_term=2",
+		"GET /_plugins/_ism/policies/" + opensearchpkg.DefaultISMPolicyID,
+		"PUT /_plugins/_ism/policies/" + opensearchpkg.DefaultISMPolicyID + "?if_seq_no=11&if_primary_term=2",
 	}) {
 		t.Fatalf("unexpected request sequence: %#v", calls)
 	}
@@ -196,7 +203,7 @@ func TestEnsureTenantCreatesWhenMissing(t *testing.T) {
 	cfg := testConfig(openSearch)
 	cfg.DashboardsURL = "http://dashboards.example"
 
-	client := newClient(cfg)
+	client := opensearchpkg.NewClient(cfg)
 	if err := client.EnsureTenant(context.Background(), "orders"); err != nil {
 		t.Fatalf("EnsureTenant returned error: %v", err)
 	}
@@ -230,7 +237,7 @@ func TestEnsureTenantSkipsWhenExisting(t *testing.T) {
 	cfg := testConfig(openSearch)
 	cfg.DashboardsURL = "http://dashboards.example"
 
-	client := newClient(cfg)
+	client := opensearchpkg.NewClient(cfg)
 	if err := client.EnsureTenant(context.Background(), "orders"); err != nil {
 		t.Fatalf("EnsureTenant returned error: %v", err)
 	}
@@ -254,7 +261,7 @@ func TestEnsureTenantReturnsErrorOnFailure(t *testing.T) {
 	cfg := testConfig(openSearch)
 	cfg.DashboardsURL = "http://dashboards.example"
 
-	client := newClient(cfg)
+	client := opensearchpkg.NewClient(cfg)
 	if err := client.EnsureTenant(context.Background(), "orders"); err == nil {
 		t.Fatal("expected EnsureTenant to fail")
 	}
@@ -300,7 +307,7 @@ func TestEnsureDashboardDataViewCreatesExpectedPatternWithoutOverwritingDefault(
 	}))
 	defer dashboards.Close()
 
-	client := newClient(testConfigWithDashboards(openSearch, dashboards))
+	client := opensearchpkg.NewClient(testConfigWithDashboards(openSearch, dashboards))
 
 	if err := client.EnsureDashboardDataView(context.Background(), "team10", "team10-hello"); err != nil {
 		t.Fatalf("EnsureDashboardDataView returned error: %v", err)
@@ -322,7 +329,7 @@ func TestEnsureDashboardDataViewCreatesExpectedPatternWithoutOverwritingDefault(
 	if defaultIndexGets != 1 {
 		t.Fatalf("expected one default-index lookup, got %d", defaultIndexGets)
 	}
-	if _, ok := client.ensuredDataViews.Load("team10/" + buildDataViewID("team10-hello")); !ok {
+	if _, ok := client.EnsuredDataViews.Load("team10/" + opensearchpkg.BuildDataViewID("team10-hello")); !ok {
 		t.Fatal("expected ensured data-view cache to contain team10-hello")
 	}
 }
@@ -411,7 +418,7 @@ func TestGatewayIngestEnsuresDashboardDataView(t *testing.T) {
 func TestGatewayRootRedirectsToLogin(t *testing.T) {
 	t.Parallel()
 
-	gateway := testGatewayHandler(Config{})
+	gateway := testGatewayHandler(appconfig.Config{})
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 
@@ -428,7 +435,7 @@ func TestGatewayRootRedirectsToLogin(t *testing.T) {
 func TestGatewayLoginServesLoginForm(t *testing.T) {
 	t.Parallel()
 
-	gateway := testGatewayHandler(Config{})
+	gateway := testGatewayHandler(appconfig.Config{})
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/login", nil)
 
@@ -449,7 +456,7 @@ func TestGatewayLoginServesLoginForm(t *testing.T) {
 func TestGatewayLoginRejectsUnsupportedMethod(t *testing.T) {
 	t.Parallel()
 
-	gateway := testGatewayHandler(Config{})
+	gateway := testGatewayHandler(appconfig.Config{})
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPut, "/login", nil)
 
@@ -466,7 +473,7 @@ func TestGatewayLoginRejectsUnsupportedMethod(t *testing.T) {
 func TestGatewayDemoServesDemoForm(t *testing.T) {
 	t.Parallel()
 
-	gateway := testGatewayHandler(Config{})
+	gateway := testGatewayHandler(appconfig.Config{})
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/demo", nil)
 
@@ -493,7 +500,7 @@ func TestGatewayDemoServesDemoForm(t *testing.T) {
 func TestGatewayDemoRejectsNonGet(t *testing.T) {
 	t.Parallel()
 
-	gateway := testGatewayHandler(Config{})
+	gateway := testGatewayHandler(appconfig.Config{})
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/demo", nil)
 
@@ -510,7 +517,7 @@ func TestGatewayDemoRejectsNonGet(t *testing.T) {
 func TestGatewayIngestBasePathReturnsNotFound(t *testing.T) {
 	t.Parallel()
 
-	gateway := testGatewayHandler(Config{})
+	gateway := testGatewayHandler(appconfig.Config{})
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/ingest", nil)
 
@@ -524,15 +531,15 @@ func TestGatewayIngestBasePathReturnsNotFound(t *testing.T) {
 func TestGatewayAuthenticatedLoginRedirectsToDashboards(t *testing.T) {
 	t.Parallel()
 
-	gateway := newGateway(newClient(Config{}), nil)
-	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, sessionData{
-		User:       &User{Name: "alice"},
-		AuthHeader: buildBasicAuthorization("alice", "secret"),
+	gateway := newTestGateway(opensearchpkg.NewClient(appconfig.Config{}), nil)
+	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, serverpkg.Session{
+		User:       &authzpkg.User{Name: "alice"},
+		AuthHeader: serverpkg.BuildBasicAuthorization("alice", "secret"),
 	})
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/login", nil)
-	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: encoded, Expires: expiresAt})
+	request.AddCookie(&http.Cookie{Name: serverpkg.SessionCookieName, Value: encoded, Expires: expiresAt})
 
 	gateway.Handler().ServeHTTP(recorder, request)
 
@@ -552,8 +559,8 @@ func TestGatewayLoginInvalidCredentialsReturnsUnauthorized(t *testing.T) {
 	}))
 	defer openSearch.Close()
 
-	gateway := testGatewayHandlerWithAuth(testConfig(openSearch), func(_, _ string) (*User, []Access, error) {
-		return nil, nil, errLDAPInvalidCredentials
+	gateway := testGatewayHandlerWithAuth(testConfig(openSearch), func(_, _ string) (*authzpkg.User, []authzpkg.Access, error) {
+		return nil, nil, ldappkg.ErrInvalidCredentials
 	})
 
 	recorder := httptest.NewRecorder()
@@ -565,7 +572,7 @@ func TestGatewayLoginInvalidCredentialsReturnsUnauthorized(t *testing.T) {
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("expected status 401, got %d: %s", recorder.Code, recorder.Body.String())
 	}
-	if strings.Contains(recorder.Header().Get("Set-Cookie"), sessionCookieName+"=") {
+	if strings.Contains(recorder.Header().Get("Set-Cookie"), serverpkg.SessionCookieName+"=") {
 		t.Fatalf("did not expect session cookie on failed login")
 	}
 }
@@ -578,8 +585,8 @@ func TestGatewayLoginUnauthorizedGroupsReturnsForbidden(t *testing.T) {
 	}))
 	defer openSearch.Close()
 
-	gateway := testGatewayHandlerWithAuth(testConfig(openSearch), func(_, _ string) (*User, []Access, error) {
-		return nil, nil, errLDAPUnauthorized
+	gateway := testGatewayHandlerWithAuth(testConfig(openSearch), func(_, _ string) (*authzpkg.User, []authzpkg.Access, error) {
+		return nil, nil, ldappkg.ErrUnauthorized
 	})
 
 	recorder := httptest.NewRecorder()
@@ -601,7 +608,7 @@ func TestGatewayLoginLDAPFailureReturnsBadGateway(t *testing.T) {
 	}))
 	defer openSearch.Close()
 
-	gateway := testGatewayHandlerWithAuth(testConfig(openSearch), func(_, _ string) (*User, []Access, error) {
+	gateway := testGatewayHandlerWithAuth(testConfig(openSearch), func(_, _ string) (*authzpkg.User, []authzpkg.Access, error) {
 		return nil, nil, errors.New("ldap server unavailable")
 	})
 
@@ -636,8 +643,8 @@ func TestGatewayLoginReservedInternalUserReturnsForbidden(t *testing.T) {
 	}))
 	defer dashboards.Close()
 
-	gateway := testGatewayHandlerWithAuth(testConfigWithDashboards(openSearch, dashboards), func(username, _ string) (*User, []Access, error) {
-		return &User{Name: username, Namespace: "team1", PullOnly: false, DeleteAllowed: true}, []Access{
+	gateway := testGatewayHandlerWithAuth(testConfigWithDashboards(openSearch, dashboards), func(username, _ string) (*authzpkg.User, []authzpkg.Access, error) {
+		return &authzpkg.User{Name: username, Namespace: "team1", PullOnly: false, DeleteAllowed: true}, []authzpkg.Access{
 			{Group: "team1_rwd", Namespace: "team1", PullOnly: false, DeleteAllowed: true},
 		}, nil
 	})
@@ -713,8 +720,8 @@ func TestGatewayLoginSuccessProvisionsUserAndSession(t *testing.T) {
 	}))
 	defer dashboards.Close()
 
-	gateway := testGatewayHandlerWithAuth(testConfigWithDashboards(openSearch, dashboards), func(username, _ string) (*User, []Access, error) {
-		return &User{Name: username, Namespace: "team1", PullOnly: false, DeleteAllowed: true}, []Access{
+	gateway := testGatewayHandlerWithAuth(testConfigWithDashboards(openSearch, dashboards), func(username, _ string) (*authzpkg.User, []authzpkg.Access, error) {
+		return &authzpkg.User{Name: username, Namespace: "team1", PullOnly: false, DeleteAllowed: true}, []authzpkg.Access{
 			{Group: "team1_rwd", Namespace: "team1", PullOnly: false, DeleteAllowed: true},
 		}, nil
 	})
@@ -731,7 +738,7 @@ func TestGatewayLoginSuccessProvisionsUserAndSession(t *testing.T) {
 	if got := recorder.Header().Get("Location"); got != "/dashboards/app/home" {
 		t.Fatalf("expected redirect to Dashboards home, got %q", got)
 	}
-	if !strings.Contains(recorder.Header().Get("Set-Cookie"), sessionCookieName+"=") {
+	if !strings.Contains(recorder.Header().Get("Set-Cookie"), serverpkg.SessionCookieName+"=") {
 		t.Fatalf("expected session cookie, got %q", recorder.Header().Get("Set-Cookie"))
 	}
 
@@ -858,8 +865,8 @@ func TestGatewayLoginMultiNamespaceRedirectsToDashboardsHome(t *testing.T) {
 	}))
 	defer dashboards.Close()
 
-	gateway := newGateway(newClient(testConfigWithDashboards(openSearch, dashboards)), func(username, _ string) (*User, []Access, error) {
-		return &User{Name: username, Namespace: "team1", PullOnly: false, DeleteAllowed: true}, []Access{
+	gateway := newTestGateway(opensearchpkg.NewClient(testConfigWithDashboards(openSearch, dashboards)), func(username, _ string) (*authzpkg.User, []authzpkg.Access, error) {
+		return &authzpkg.User{Name: username, Namespace: "team1", PullOnly: false, DeleteAllowed: true}, []authzpkg.Access{
 			{Group: "team10_r", Namespace: "team10", PullOnly: true},
 			{Group: "team1_rwd", Namespace: "team1", PullOnly: false, DeleteAllowed: true},
 			{Group: "team2_rw", Namespace: "team2", PullOnly: false},
@@ -902,19 +909,19 @@ func TestRoleRequestForAccessModes(t *testing.T) {
 
 	tests := []struct {
 		name              string
-		access            Access
+		access            authzpkg.Access
 		wantAllowed       []string
 		wantTenantAllowed string
 	}{
-		{name: "read", access: Access{Namespace: "team1", PullOnly: true}, wantAllowed: []string{"read"}, wantTenantAllowed: "kibana_all_write"},
-		{name: "read delete", access: Access{Namespace: "team1", PullOnly: true, DeleteAllowed: true}, wantAllowed: []string{"read", "delete"}, wantTenantAllowed: "kibana_all_write"},
-		{name: "read write", access: Access{Namespace: "team1", PullOnly: false}, wantAllowed: []string{"read", "write"}, wantTenantAllowed: "kibana_all_write"},
-		{name: "read write delete", access: Access{Namespace: "team1", PullOnly: false, DeleteAllowed: true}, wantAllowed: []string{"crud"}, wantTenantAllowed: "kibana_all_write"},
+		{name: "read", access: authzpkg.Access{Namespace: "team1", PullOnly: true}, wantAllowed: []string{"read"}, wantTenantAllowed: "kibana_all_write"},
+		{name: "read delete", access: authzpkg.Access{Namespace: "team1", PullOnly: true, DeleteAllowed: true}, wantAllowed: []string{"read", "delete"}, wantTenantAllowed: "kibana_all_write"},
+		{name: "read write", access: authzpkg.Access{Namespace: "team1", PullOnly: false}, wantAllowed: []string{"read", "write"}, wantTenantAllowed: "kibana_all_write"},
+		{name: "read write delete", access: authzpkg.Access{Namespace: "team1", PullOnly: false, DeleteAllowed: true}, wantAllowed: []string{"crud"}, wantTenantAllowed: "kibana_all_write"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			role := roleRequestForAccess(tt.access)
+			role := opensearchpkg.RoleRequestForAccess(tt.access)
 			if got := role.IndexPermissions[0].AllowedActions; !reflect.DeepEqual(got, tt.wantAllowed) {
 				t.Fatalf("unexpected allowed actions: %#v", got)
 			}
@@ -937,7 +944,7 @@ func TestRoleRequestForAccessModes(t *testing.T) {
 func TestNormalizeAccessByNamespaceCombinesPermissions(t *testing.T) {
 	t.Parallel()
 
-	result := normalizeAccessByNamespace([]Access{
+	result := authzpkg.NormalizeAccessByNamespace([]authzpkg.Access{
 		{Group: "team1_rw", Namespace: "team1", PullOnly: false},
 		{Group: "team1_rd", Namespace: "team1", PullOnly: true, DeleteAllowed: true},
 		{Group: "team2_r", Namespace: "team2", PullOnly: true},
@@ -946,10 +953,10 @@ func TestNormalizeAccessByNamespaceCombinesPermissions(t *testing.T) {
 	if len(result) != 2 {
 		t.Fatalf("expected two namespaces, got %#v", result)
 	}
-	if got := roleModeForAccess(result[0]); got != "rwd" {
+	if got := authzpkg.RoleModeForAccess(result[0]); got != "rwd" {
 		t.Fatalf("expected team1 to combine to rwd, got %q", got)
 	}
-	if got := roleModeForAccess(result[1]); got != "r" {
+	if got := authzpkg.RoleModeForAccess(result[1]); got != "r" {
 		t.Fatalf("expected team2 to remain r, got %q", got)
 	}
 }
@@ -957,7 +964,7 @@ func TestNormalizeAccessByNamespaceCombinesPermissions(t *testing.T) {
 func TestGatewayDashboardsRequiresLogin(t *testing.T) {
 	t.Parallel()
 
-	gateway := testGatewayHandler(Config{DashboardsURL: "http://dashboards.example"})
+	gateway := testGatewayHandler(appconfig.Config{DashboardsURL: "http://dashboards.example"})
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/dashboards/app/home", nil)
 
@@ -993,22 +1000,22 @@ func TestGatewayDashboardsProxyForwardsSessionBasicAuth(t *testing.T) {
 	}))
 	defer dashboards.Close()
 
-	gateway := newGateway(newClient(testConfigWithDashboards(openSearch, dashboards)), nil)
-	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, sessionData{
-		User:       &User{Name: "testuser"},
-		AuthHeader: buildBasicAuthorization("testuser", "dogood"),
+	gateway := newTestGateway(opensearchpkg.NewClient(testConfigWithDashboards(openSearch, dashboards)), nil)
+	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, serverpkg.Session{
+		User:       &authzpkg.User{Name: "testuser"},
+		AuthHeader: serverpkg.BuildBasicAuthorization("testuser", "dogood"),
 	})
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/dashboards/app/home?foo=bar", nil)
-	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: encoded, Expires: expiresAt})
+	request.AddCookie(&http.Cookie{Name: serverpkg.SessionCookieName, Value: encoded, Expires: expiresAt})
 
 	gateway.Handler().ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d: %s", recorder.Code, recorder.Body.String())
 	}
-	if upstreamAuth != buildBasicAuthorization("testuser", "dogood") {
+	if upstreamAuth != serverpkg.BuildBasicAuthorization("testuser", "dogood") {
 		t.Fatalf("unexpected Authorization header: %q", upstreamAuth)
 	}
 	if upstreamTenant != "" {
@@ -1038,15 +1045,15 @@ func TestGatewayDashboardsProxyDoesNotForceTenantForMultiNamespaceSession(t *tes
 	}))
 	defer dashboards.Close()
 
-	gateway := newGateway(newClient(testConfigWithDashboards(openSearch, dashboards)), nil)
-	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, sessionData{
-		User:       &User{Name: "testuser"},
-		AuthHeader: buildBasicAuthorization("testuser", "dogood"),
+	gateway := newTestGateway(opensearchpkg.NewClient(testConfigWithDashboards(openSearch, dashboards)), nil)
+	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, serverpkg.Session{
+		User:       &authzpkg.User{Name: "testuser"},
+		AuthHeader: serverpkg.BuildBasicAuthorization("testuser", "dogood"),
 	})
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/dashboards/app/home", nil)
-	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: encoded, Expires: expiresAt})
+	request.AddCookie(&http.Cookie{Name: serverpkg.SessionCookieName, Value: encoded, Expires: expiresAt})
 
 	gateway.Handler().ServeHTTP(recorder, request)
 
@@ -1076,12 +1083,12 @@ func TestGatewayDashboardsProxyForwardsTenantSelectionQuery(t *testing.T) {
 	}))
 	defer dashboards.Close()
 
-	gateway := newGateway(newClient(testConfigWithDashboards(openSearch, dashboards)), nil)
-	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, sessionData{
-		User:       &User{Name: "testuser"},
-		AuthHeader: buildBasicAuthorization("testuser", "dogood"),
+	gateway := newTestGateway(opensearchpkg.NewClient(testConfigWithDashboards(openSearch, dashboards)), nil)
+	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, serverpkg.Session{
+		User:       &authzpkg.User{Name: "testuser"},
+		AuthHeader: serverpkg.BuildBasicAuthorization("testuser", "dogood"),
 	})
-	cookie := &http.Cookie{Name: sessionCookieName, Value: encoded, Expires: expiresAt}
+	cookie := &http.Cookie{Name: serverpkg.SessionCookieName, Value: encoded, Expires: expiresAt}
 
 	firstRecorder := httptest.NewRecorder()
 	firstRequest := httptest.NewRequest(http.MethodGet, "/dashboards/app/home?security_tenant=team10", nil)
@@ -1117,15 +1124,15 @@ func TestGatewayDashboardsProxyLeavesEmptyIndexPatternFindResultsUntouched(t *te
 	}))
 	defer dashboards.Close()
 
-	gateway := newGateway(newClient(testConfigWithDashboards(openSearch, dashboards)), nil)
-	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, sessionData{
-		User:       &User{Name: "testuser"},
-		AuthHeader: buildBasicAuthorization("testuser", "dogood"),
+	gateway := newTestGateway(opensearchpkg.NewClient(testConfigWithDashboards(openSearch, dashboards)), nil)
+	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, serverpkg.Session{
+		User:       &authzpkg.User{Name: "testuser"},
+		AuthHeader: serverpkg.BuildBasicAuthorization("testuser", "dogood"),
 	})
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/dashboards/api/saved_objects/_find?fields=title&per_page=10000&type=index-pattern", nil)
-	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: encoded, Expires: expiresAt})
+	request.AddCookie(&http.Cookie{Name: serverpkg.SessionCookieName, Value: encoded, Expires: expiresAt})
 
 	gateway.Handler().ServeHTTP(recorder, request)
 
@@ -1152,15 +1159,15 @@ func TestGatewayDashboardsProxyLeavesNonEmptyIndexPatternFindResultsUntouched(t 
 	}))
 	defer dashboards.Close()
 
-	gateway := newGateway(newClient(testConfigWithDashboards(openSearch, dashboards)), nil)
-	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, sessionData{
-		User:       &User{Name: "testuser"},
-		AuthHeader: buildBasicAuthorization("testuser", "dogood"),
+	gateway := newTestGateway(opensearchpkg.NewClient(testConfigWithDashboards(openSearch, dashboards)), nil)
+	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, serverpkg.Session{
+		User:       &authzpkg.User{Name: "testuser"},
+		AuthHeader: serverpkg.BuildBasicAuthorization("testuser", "dogood"),
 	})
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/dashboards/api/saved_objects/_find?fields=title&per_page=10000&type=index-pattern", nil)
-	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: encoded, Expires: expiresAt})
+	request.AddCookie(&http.Cookie{Name: serverpkg.SessionCookieName, Value: encoded, Expires: expiresAt})
 
 	gateway.Handler().ServeHTTP(recorder, request)
 
@@ -1185,15 +1192,15 @@ func TestGatewayLogoutClearsSession(t *testing.T) {
 	}))
 	defer dashboards.Close()
 
-	gateway := newGateway(newClient(testConfigWithDashboards(openSearch, dashboards)), nil)
-	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, sessionData{
-		User:       &User{Name: "testuser"},
-		AuthHeader: buildBasicAuthorization("testuser", "dogood"),
+	gateway := newTestGateway(opensearchpkg.NewClient(testConfigWithDashboards(openSearch, dashboards)), nil)
+	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, serverpkg.Session{
+		User:       &authzpkg.User{Name: "testuser"},
+		AuthHeader: serverpkg.BuildBasicAuthorization("testuser", "dogood"),
 	})
 
 	logoutRecorder := httptest.NewRecorder()
 	logoutRequest := httptest.NewRequest(http.MethodPost, "/logout", nil)
-	logoutRequest.AddCookie(&http.Cookie{Name: sessionCookieName, Value: encoded, Expires: expiresAt})
+	logoutRequest.AddCookie(&http.Cookie{Name: serverpkg.SessionCookieName, Value: encoded, Expires: expiresAt})
 
 	gateway.Handler().ServeHTTP(logoutRecorder, logoutRequest)
 
@@ -1204,7 +1211,7 @@ func TestGatewayLogoutClearsSession(t *testing.T) {
 	// With stateless cookies the gateway can no longer revoke an issued
 	// cookie server-side; the strongest property the logout response can
 	// guarantee is that the browser's copy is cleared.
-	clearedCookie := findCookie(logoutRecorder.Result().Cookies(), sessionCookieName)
+	clearedCookie := findCookie(logoutRecorder.Result().Cookies(), serverpkg.SessionCookieName)
 	if clearedCookie == nil {
 		t.Fatal("expected logout response to set a clearing session cookie")
 	}
@@ -1236,11 +1243,11 @@ func findCookie(cookies []*http.Cookie, name string) *http.Cookie {
 func TestGatewayInvalidSessionRedirectsToLogin(t *testing.T) {
 	t.Parallel()
 
-	gateway := newGateway(newClient(Config{DashboardsURL: "http://dashboards.example"}), nil)
+	gateway := newTestGateway(opensearchpkg.NewClient(appconfig.Config{DashboardsURL: "http://dashboards.example"}), nil)
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/dashboards/app/home", nil)
-	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "expired"})
+	request.AddCookie(&http.Cookie{Name: serverpkg.SessionCookieName, Value: "expired"})
 
 	gateway.Handler().ServeHTTP(recorder, request)
 
@@ -1287,8 +1294,8 @@ func TestGatewayIngestRejectsInvalidCredentials(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	request.SetBasicAuth("writer", "wrong")
 
-	testGatewayHandlerWithAuth(testConfig(openSearch), func(_, _ string) (*User, []Access, error) {
-		return nil, nil, errLDAPInvalidCredentials
+	testGatewayHandlerWithAuth(testConfig(openSearch), func(_, _ string) (*authzpkg.User, []authzpkg.Access, error) {
+		return nil, nil, ldappkg.ErrInvalidCredentials
 	}).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusUnauthorized {
@@ -1309,8 +1316,8 @@ func TestGatewayIngestRejectsReadOnlyAccess(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	request.SetBasicAuth("johndoe", "dogood")
 
-	testGatewayHandlerWithAuth(testConfig(openSearch), func(username, _ string) (*User, []Access, error) {
-		return &User{Name: username, Namespace: "team10", PullOnly: true}, []Access{
+	testGatewayHandlerWithAuth(testConfig(openSearch), func(username, _ string) (*authzpkg.User, []authzpkg.Access, error) {
+		return &authzpkg.User{Name: username, Namespace: "team10", PullOnly: true}, []authzpkg.Access{
 			{Group: "team10_r", Namespace: "team10", PullOnly: true},
 		}, nil
 	}).ServeHTTP(recorder, request)
@@ -1333,8 +1340,8 @@ func TestGatewayIngestRejectsWrongNamespace(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	request.SetBasicAuth("writer", "secret")
 
-	testGatewayHandlerWithAuth(testConfig(openSearch), func(username, _ string) (*User, []Access, error) {
-		return &User{Name: username, Namespace: "team1"}, []Access{
+	testGatewayHandlerWithAuth(testConfig(openSearch), func(username, _ string) (*authzpkg.User, []authzpkg.Access, error) {
+		return &authzpkg.User{Name: username, Namespace: "team1"}, []authzpkg.Access{
 			{Group: "team1_rw", Namespace: "team1"},
 		}, nil
 	}).ServeHTTP(recorder, request)
@@ -1357,8 +1364,8 @@ func TestGatewayIngestRejectsBareNamespace(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	request.SetBasicAuth("writer", "secret")
 
-	testGatewayHandlerWithAuth(testConfig(openSearch), func(username, _ string) (*User, []Access, error) {
-		return &User{Name: username, Namespace: "team10"}, []Access{
+	testGatewayHandlerWithAuth(testConfig(openSearch), func(username, _ string) (*authzpkg.User, []authzpkg.Access, error) {
+		return &authzpkg.User{Name: username, Namespace: "team10"}, []authzpkg.Access{
 			{Group: "team10_rw", Namespace: "team10"},
 		}, nil
 	}).ServeHTTP(recorder, request)
@@ -1393,20 +1400,20 @@ func TestGatewayIngestUsesAuthenticatedSessionAccess(t *testing.T) {
 	}))
 	defer openSearch.Close()
 
-	gateway := newGateway(newClient(testConfig(openSearch)), func(_, _ string) (*User, []Access, error) {
+	gateway := newTestGateway(opensearchpkg.NewClient(testConfig(openSearch)), func(_, _ string) (*authzpkg.User, []authzpkg.Access, error) {
 		t.Fatalf("session-backed ingest should not call LDAP authenticate")
 		return nil, nil, nil
 	})
-	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, sessionData{
-		User:       &User{Name: "ingestuser", Namespace: "team10"},
-		Access:     []Access{{Group: "team10_rw", Namespace: "team10"}},
-		AuthHeader: buildBasicAuthorization("ingestuser", "dogood"),
+	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, serverpkg.Session{
+		User:       &authzpkg.User{Name: "ingestuser", Namespace: "team10"},
+		Access:     []authzpkg.Access{{Group: "team10_rw", Namespace: "team10"}},
+		AuthHeader: serverpkg.BuildBasicAuthorization("ingestuser", "dogood"),
 	})
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/ingest/team10-hello", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
 	request.Header.Set("Content-Type", "application/json")
-	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: encoded, Expires: expiresAt})
+	request.AddCookie(&http.Cookie{Name: serverpkg.SessionCookieName, Value: encoded, Expires: expiresAt})
 
 	gateway.Handler().ServeHTTP(recorder, request)
 
@@ -1476,7 +1483,7 @@ func TestGatewayIngestBootstrapsAndIndexes(t *testing.T) {
 	if got := settings["plugins.index_state_management.rollover_alias"]; got != "orders-demo-20241230-rollover" {
 		t.Fatalf("unexpected rollover alias setting: %#v", got)
 	}
-	if got := settings["plugins.index_state_management.policy_id"]; got != ismPolicyID {
+	if got := settings["plugins.index_state_management.policy_id"]; got != opensearchpkg.DefaultISMPolicyID {
 		t.Fatalf("unexpected policy setting: %#v", got)
 	}
 	if got := indexBody["event_time"]; got != "2024-12-30T10:11:12Z" {
@@ -1486,7 +1493,7 @@ func TestGatewayIngestBootstrapsAndIndexes(t *testing.T) {
 		t.Fatalf("expected arbitrary fields to be preserved, got %#v", got)
 	}
 
-	var response ingestResponse
+	var response serverpkg.IngestResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -1537,7 +1544,7 @@ func TestGatewayRepeatWriteSkipsBootstrap(t *testing.T) {
 		t.Fatalf("unexpected OpenSearch sequence: %#v", calls)
 	}
 
-	var response ingestResponse
+	var response serverpkg.IngestResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -1573,7 +1580,7 @@ func TestEnsureWriteAliasRepairsExistingAliasPolicy(t *testing.T) {
 	}))
 	defer openSearch.Close()
 
-	bootstrapped, err := newClient(testConfig(openSearch)).EnsureWriteAlias(context.Background(), "orders-demo-20241230-rollover")
+	bootstrapped, err := opensearchpkg.NewClient(testConfig(openSearch)).EnsureWriteAlias(context.Background(), "orders-demo-20241230-rollover")
 	if err != nil {
 		t.Fatalf("EnsureWriteAlias returned error: %v", err)
 	}
@@ -1587,7 +1594,7 @@ func TestEnsureWriteAliasRepairsExistingAliasPolicy(t *testing.T) {
 	}) {
 		t.Fatalf("unexpected repair calls: %#v", calls)
 	}
-	if got := attachBody["policy_id"]; got != ismPolicyID {
+	if got := attachBody["policy_id"]; got != opensearchpkg.DefaultISMPolicyID {
 		t.Fatalf("unexpected attached policy id: %#v", got)
 	}
 }
@@ -1614,7 +1621,7 @@ func TestEnsureWriteAliasRejectsFailedISMAddPolicyResponse(t *testing.T) {
 	}))
 	defer openSearch.Close()
 
-	client := newClient(testConfig(openSearch))
+	client := opensearchpkg.NewClient(testConfig(openSearch))
 	bootstrapped, err := client.EnsureWriteAlias(context.Background(), "orders-demo-20241230-rollover")
 	if err == nil {
 		t.Fatal("expected EnsureWriteAlias to reject failed ISM add-policy response")
@@ -1667,8 +1674,8 @@ func TestGatewayValidationErrors(t *testing.T) {
 		{name: "name too long", method: http.MethodPost, path: "/ingest/" + longIndexName, contentType: "application/json", body: `{"event_time":"2024-12-30T10:11:12Z"}`, wantStatus: http.StatusBadRequest},
 	}
 
-	gateway := testGatewayHandlerWithAuth(testConfig(openSearch), func(username, _ string) (*User, []Access, error) {
-		return &User{Name: username, Namespace: "orders"}, []Access{
+	gateway := testGatewayHandlerWithAuth(testConfig(openSearch), func(username, _ string) (*authzpkg.User, []authzpkg.Access, error) {
+		return &authzpkg.User{Name: username, Namespace: "orders"}, []authzpkg.Access{
 			{Group: "orders_rw", Namespace: "orders"},
 			{Group: longNamespace + "_rw", Namespace: longNamespace},
 		}, nil
@@ -1921,7 +1928,7 @@ func TestGatewayBootstrapConflictRetriesAliasCheck(t *testing.T) {
 		t.Fatalf("unexpected OpenSearch sequence: %#v", calls)
 	}
 
-	var response ingestResponse
+	var response serverpkg.IngestResponse
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -1962,8 +1969,8 @@ func sequenceHandler(t *testing.T, responses ...responseSpec) http.HandlerFunc {
 	}
 }
 
-func testConfig(server *httptest.Server) Config {
-	return Config{
+func testConfig(server *httptest.Server) appconfig.Config {
+	return appconfig.Config{
 		BaseURL:            server.URL,
 		Username:           "admin",
 		Password:           "Admin123!",
@@ -1977,27 +1984,34 @@ func testConfig(server *httptest.Server) Config {
 	}
 }
 
-func testConfigWithDashboards(openSearch, dashboards *httptest.Server) Config {
+func testConfigWithDashboards(openSearch, dashboards *httptest.Server) appconfig.Config {
 	cfg := testConfig(openSearch)
 	cfg.DashboardsURL = dashboards.URL
 	cfg.HTTPClient = openSearch.Client()
 	return cfg
 }
 
-func testGatewayHandler(cfg Config) http.Handler {
+func testGatewayHandler(cfg appconfig.Config) http.Handler {
 	return testGatewayHandlerWithAuth(cfg, defaultTestLDAPAuthenticator)
 }
 
-func testGatewayHandlerWithAuth(cfg Config, authenticate ldapAuthenticator) http.Handler {
-	return newGateway(newClient(cfg), authenticate).Handler()
+func testGatewayHandlerWithAuth(cfg appconfig.Config, authenticate serverpkg.AuthenticateFunc) http.Handler {
+	return newTestGateway(opensearchpkg.NewClient(cfg), authenticate).Handler()
 }
 
-func defaultTestLDAPAuthenticator(username, password string) (*User, []Access, error) {
+func newTestGateway(client *opensearchpkg.Client, authenticate serverpkg.AuthenticateFunc) *serverpkg.Gateway {
+	if authenticate == nil {
+		authenticate = defaultTestLDAPAuthenticator
+	}
+	return serverpkg.New(client, authenticate)
+}
+
+func defaultTestLDAPAuthenticator(username, password string) (*authzpkg.User, []authzpkg.Access, error) {
 	if strings.TrimSpace(username) == "" || password == "" {
-		return nil, nil, errLDAPInvalidCredentials
+		return nil, nil, ldappkg.ErrInvalidCredentials
 	}
 
-	return &User{Name: username, Namespace: "orders"}, []Access{
+	return &authzpkg.User{Name: username, Namespace: "orders"}, []authzpkg.Access{
 		{Group: "orders_rw", Namespace: "orders"},
 		{Group: "team1_rw", Namespace: "team1"},
 		{Group: "team10_rw", Namespace: "team10"},
@@ -2006,6 +2020,15 @@ func defaultTestLDAPAuthenticator(username, password string) (*User, []Access, e
 
 func addTestIngestBasicAuth(request *http.Request) {
 	request.SetBasicAuth("writer", "secret")
+}
+
+func mustEncodeSessionCookieFromData(tb testing.TB, g *serverpkg.Gateway, data serverpkg.Session) (string, time.Time) {
+	tb.Helper()
+	encoded, err := g.EncodeSessionCookieValue(data)
+	if err != nil {
+		tb.Fatalf("encode session cookie: %v", err)
+	}
+	return encoded, time.Now().Add(time.Hour)
 }
 
 func decodeRequestBody(t *testing.T, r *http.Request) map[string]any {
