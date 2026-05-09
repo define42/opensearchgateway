@@ -19,6 +19,7 @@ import (
 	ldappkg "github.com/define42/opensearchgateway/internal/ldap"
 )
 
+//nolint:gocognit,cyclop,funlen // Docker-backed integration scenario verifies the full LDAP ingest path.
 func TestLDAPIngestUserCanIngestTeam10(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Docker-backed LDAP integration test in short mode")
@@ -195,6 +196,7 @@ func TestLDAPIngestUserCanIngestTeam10(t *testing.T) {
 	}
 }
 
+//nolint:funlen // Docker-backed integration scenario setup is intentionally explicit.
 func TestLDAPJohndoeCannotIngestTeam10(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Docker-backed LDAP integration test in short mode")
@@ -235,7 +237,7 @@ func TestLDAPJohndoeCannotIngestTeam10(t *testing.T) {
 	}))
 	defer openSearch.Close()
 
-	dashboards := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	dashboards := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected Dashboards request: %s %s", r.Method, r.URL.RequestURI())
 	}))
 	defer dashboards.Close()

@@ -254,6 +254,7 @@ func TestEnsureTenantReturnsErrorOnFailure(t *testing.T) {
 	}
 }
 
+//nolint:funlen // End-to-end dashboard data-view setup keeps request assertions together.
 func TestEnsureDashboardDataViewCreatesExpectedPatternWithoutOverwritingDefault(t *testing.T) {
 	t.Parallel()
 
@@ -320,6 +321,7 @@ func TestEnsureDashboardDataViewCreatesExpectedPatternWithoutOverwritingDefault(
 	}
 }
 
+//nolint:funlen // End-to-end ingest flow keeps OpenSearch and Dashboards assertions together.
 func TestGatewayIngestEnsuresDashboardDataView(t *testing.T) {
 	t.Parallel()
 
@@ -533,12 +535,12 @@ func TestGatewayAuthenticatedLoginRedirectsToDashboards(t *testing.T) {
 func TestGatewayLoginInvalidCredentialsReturnsUnauthorized(t *testing.T) {
 	t.Parallel()
 
-	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	openSearch := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
 	}))
 	defer openSearch.Close()
 
-	gateway := testGatewayHandlerWithAuth(testConfig(openSearch), func(username, password string) (*User, []Access, error) {
+	gateway := testGatewayHandlerWithAuth(testConfig(openSearch), func(_, _ string) (*User, []Access, error) {
 		return nil, nil, errLDAPInvalidCredentials
 	})
 
@@ -559,12 +561,12 @@ func TestGatewayLoginInvalidCredentialsReturnsUnauthorized(t *testing.T) {
 func TestGatewayLoginUnauthorizedGroupsReturnsForbidden(t *testing.T) {
 	t.Parallel()
 
-	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	openSearch := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
 	}))
 	defer openSearch.Close()
 
-	gateway := testGatewayHandlerWithAuth(testConfig(openSearch), func(username, password string) (*User, []Access, error) {
+	gateway := testGatewayHandlerWithAuth(testConfig(openSearch), func(_, _ string) (*User, []Access, error) {
 		return nil, nil, errLDAPUnauthorized
 	})
 
@@ -582,12 +584,12 @@ func TestGatewayLoginUnauthorizedGroupsReturnsForbidden(t *testing.T) {
 func TestGatewayLoginLDAPFailureReturnsBadGateway(t *testing.T) {
 	t.Parallel()
 
-	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	openSearch := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
 	}))
 	defer openSearch.Close()
 
-	gateway := testGatewayHandlerWithAuth(testConfig(openSearch), func(username, password string) (*User, []Access, error) {
+	gateway := testGatewayHandlerWithAuth(testConfig(openSearch), func(_, _ string) (*User, []Access, error) {
 		return nil, nil, errors.New("ldap server unavailable")
 	})
 
@@ -617,12 +619,12 @@ func TestGatewayLoginReservedInternalUserReturnsForbidden(t *testing.T) {
 	}))
 	defer openSearch.Close()
 
-	dashboards := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	dashboards := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected Dashboards request: %s %s", r.Method, r.URL.Path)
 	}))
 	defer dashboards.Close()
 
-	gateway := testGatewayHandlerWithAuth(testConfigWithDashboards(openSearch, dashboards), func(username, password string) (*User, []Access, error) {
+	gateway := testGatewayHandlerWithAuth(testConfigWithDashboards(openSearch, dashboards), func(username, _ string) (*User, []Access, error) {
 		return &User{Name: username, Namespace: "team1", PullOnly: false, DeleteAllowed: true}, []Access{
 			{Group: "team1_rwd", Namespace: "team1", PullOnly: false, DeleteAllowed: true},
 		}, nil
@@ -644,6 +646,7 @@ func TestGatewayLoginReservedInternalUserReturnsForbidden(t *testing.T) {
 	}
 }
 
+//nolint:gocognit,cyclop,funlen // Login provisioning scenario validates the complete request sequence.
 func TestGatewayLoginSuccessProvisionsUserAndSession(t *testing.T) {
 	t.Parallel()
 
@@ -698,7 +701,7 @@ func TestGatewayLoginSuccessProvisionsUserAndSession(t *testing.T) {
 	}))
 	defer dashboards.Close()
 
-	gateway := testGatewayHandlerWithAuth(testConfigWithDashboards(openSearch, dashboards), func(username, password string) (*User, []Access, error) {
+	gateway := testGatewayHandlerWithAuth(testConfigWithDashboards(openSearch, dashboards), func(username, _ string) (*User, []Access, error) {
 		return &User{Name: username, Namespace: "team1", PullOnly: false, DeleteAllowed: true}, []Access{
 			{Group: "team1_rwd", Namespace: "team1", PullOnly: false, DeleteAllowed: true},
 		}, nil
@@ -790,6 +793,7 @@ func TestGatewayLoginSuccessProvisionsUserAndSession(t *testing.T) {
 	}
 }
 
+//nolint:cyclop,funlen // Multi-namespace login scenario verifies provisioning across namespaces.
 func TestGatewayLoginMultiNamespaceRedirectsToDashboardsHome(t *testing.T) {
 	t.Parallel()
 
@@ -842,7 +846,7 @@ func TestGatewayLoginMultiNamespaceRedirectsToDashboardsHome(t *testing.T) {
 	}))
 	defer dashboards.Close()
 
-	gateway := newGateway(newClient(testConfigWithDashboards(openSearch, dashboards)), func(username, password string) (*User, []Access, error) {
+	gateway := newGateway(newClient(testConfigWithDashboards(openSearch, dashboards)), func(username, _ string) (*User, []Access, error) {
 		return &User{Name: username, Namespace: "team1", PullOnly: false, DeleteAllowed: true}, []Access{
 			{Group: "team10_r", Namespace: "team10", PullOnly: true},
 			{Group: "team1_rwd", Namespace: "team1", PullOnly: false, DeleteAllowed: true},
@@ -880,6 +884,7 @@ func TestGatewayLoginMultiNamespaceRedirectsToDashboardsHome(t *testing.T) {
 	}
 }
 
+//nolint:gocognit // Table-driven role mode assertions intentionally cover every access shape.
 func TestRoleRequestForAccessModes(t *testing.T) {
 	t.Parallel()
 
@@ -957,7 +962,7 @@ func TestGatewayDashboardsRequiresLogin(t *testing.T) {
 func TestGatewayDashboardsProxyForwardsSessionBasicAuth(t *testing.T) {
 	t.Parallel()
 
-	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	openSearch := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
 	}))
 	defer openSearch.Close()
@@ -1012,7 +1017,7 @@ func TestGatewayDashboardsProxyForwardsSessionBasicAuth(t *testing.T) {
 func TestGatewayDashboardsProxyDoesNotForceTenantForMultiNamespaceSession(t *testing.T) {
 	t.Parallel()
 
-	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	openSearch := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
 	}))
 	defer openSearch.Close()
@@ -1052,7 +1057,7 @@ func TestGatewayDashboardsProxyDoesNotForceTenantForMultiNamespaceSession(t *tes
 func TestGatewayDashboardsProxyForwardsTenantSelectionQuery(t *testing.T) {
 	t.Parallel()
 
-	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	openSearch := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
 	}))
 	defer openSearch.Close()
@@ -1097,7 +1102,7 @@ func TestGatewayDashboardsProxyForwardsTenantSelectionQuery(t *testing.T) {
 func TestGatewayDashboardsProxyLeavesEmptyIndexPatternFindResultsUntouched(t *testing.T) {
 	t.Parallel()
 
-	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	openSearch := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
 	}))
 	defer openSearch.Close()
@@ -1139,13 +1144,13 @@ func TestGatewayDashboardsProxyLeavesEmptyIndexPatternFindResultsUntouched(t *te
 func TestGatewayDashboardsProxyLeavesNonEmptyIndexPatternFindResultsUntouched(t *testing.T) {
 	t.Parallel()
 
-	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	openSearch := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
 	}))
 	defer openSearch.Close()
 
 	const upstreamBody = `{"page":1,"per_page":10000,"total":1,"saved_objects":[{"id":"upstream-pattern","type":"index-pattern","attributes":{"title":"custom-*","timeFieldName":"event_time"}}]}`
-	dashboards := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	dashboards := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, upstreamBody)
 	}))
@@ -1178,12 +1183,12 @@ func TestGatewayDashboardsProxyLeavesNonEmptyIndexPatternFindResultsUntouched(t 
 func TestGatewayLogoutClearsSession(t *testing.T) {
 	t.Parallel()
 
-	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	openSearch := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
 	}))
 	defer openSearch.Close()
 
-	dashboards := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	dashboards := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected Dashboards request after logout: %s %s", r.Method, r.URL.Path)
 	}))
 	defer dashboards.Close()
@@ -1246,7 +1251,7 @@ func TestGatewayInvalidSessionRedirectsToLogin(t *testing.T) {
 func TestGatewayIngestRequiresAuthentication(t *testing.T) {
 	t.Parallel()
 
-	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	openSearch := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
 	}))
 	defer openSearch.Close()
@@ -1268,7 +1273,7 @@ func TestGatewayIngestRequiresAuthentication(t *testing.T) {
 func TestGatewayIngestRejectsInvalidCredentials(t *testing.T) {
 	t.Parallel()
 
-	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	openSearch := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
 	}))
 	defer openSearch.Close()
@@ -1278,7 +1283,7 @@ func TestGatewayIngestRejectsInvalidCredentials(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	request.SetBasicAuth("writer", "wrong")
 
-	testGatewayHandlerWithAuth(testConfig(openSearch), func(username, password string) (*User, []Access, error) {
+	testGatewayHandlerWithAuth(testConfig(openSearch), func(_, _ string) (*User, []Access, error) {
 		return nil, nil, errLDAPInvalidCredentials
 	}).ServeHTTP(recorder, request)
 
@@ -1290,7 +1295,7 @@ func TestGatewayIngestRejectsInvalidCredentials(t *testing.T) {
 func TestGatewayIngestRejectsReadOnlyAccess(t *testing.T) {
 	t.Parallel()
 
-	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	openSearch := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
 	}))
 	defer openSearch.Close()
@@ -1300,7 +1305,7 @@ func TestGatewayIngestRejectsReadOnlyAccess(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	request.SetBasicAuth("johndoe", "dogood")
 
-	testGatewayHandlerWithAuth(testConfig(openSearch), func(username, password string) (*User, []Access, error) {
+	testGatewayHandlerWithAuth(testConfig(openSearch), func(username, _ string) (*User, []Access, error) {
 		return &User{Name: username, Namespace: "team10", PullOnly: true}, []Access{
 			{Group: "team10_r", Namespace: "team10", PullOnly: true},
 		}, nil
@@ -1314,7 +1319,7 @@ func TestGatewayIngestRejectsReadOnlyAccess(t *testing.T) {
 func TestGatewayIngestRejectsWrongNamespace(t *testing.T) {
 	t.Parallel()
 
-	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	openSearch := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
 	}))
 	defer openSearch.Close()
@@ -1324,7 +1329,7 @@ func TestGatewayIngestRejectsWrongNamespace(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	request.SetBasicAuth("writer", "secret")
 
-	testGatewayHandlerWithAuth(testConfig(openSearch), func(username, password string) (*User, []Access, error) {
+	testGatewayHandlerWithAuth(testConfig(openSearch), func(username, _ string) (*User, []Access, error) {
 		return &User{Name: username, Namespace: "team1"}, []Access{
 			{Group: "team1_rw", Namespace: "team1"},
 		}, nil
@@ -1338,7 +1343,7 @@ func TestGatewayIngestRejectsWrongNamespace(t *testing.T) {
 func TestGatewayIngestRejectsBareNamespace(t *testing.T) {
 	t.Parallel()
 
-	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	openSearch := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
 	}))
 	defer openSearch.Close()
@@ -1348,7 +1353,7 @@ func TestGatewayIngestRejectsBareNamespace(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	request.SetBasicAuth("writer", "secret")
 
-	testGatewayHandlerWithAuth(testConfig(openSearch), func(username, password string) (*User, []Access, error) {
+	testGatewayHandlerWithAuth(testConfig(openSearch), func(username, _ string) (*User, []Access, error) {
 		return &User{Name: username, Namespace: "team10"}, []Access{
 			{Group: "team10_rw", Namespace: "team10"},
 		}, nil
@@ -1378,7 +1383,7 @@ func TestGatewayIngestUsesAuthenticatedSessionAccess(t *testing.T) {
 	}))
 	defer openSearch.Close()
 
-	gateway := newGateway(newClient(testConfig(openSearch)), func(username, password string) (*User, []Access, error) {
+	gateway := newGateway(newClient(testConfig(openSearch)), func(_, _ string) (*User, []Access, error) {
 		t.Fatalf("session-backed ingest should not call LDAP authenticate")
 		return nil, nil, nil
 	})
@@ -1410,6 +1415,7 @@ func TestGatewayIngestUsesAuthenticatedSessionAccess(t *testing.T) {
 	}
 }
 
+//nolint:cyclop,funlen // Ingest bootstrap scenario keeps alias, policy, and indexing assertions together.
 func TestGatewayIngestBootstrapsAndIndexes(t *testing.T) {
 	t.Parallel()
 
@@ -1537,7 +1543,7 @@ func TestGatewayRepeatWriteSkipsBootstrap(t *testing.T) {
 func TestGatewayValidationErrors(t *testing.T) {
 	t.Parallel()
 
-	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	openSearch := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected OpenSearch call for validation error case: %s %s", r.Method, r.URL.Path)
 	}))
 	defer openSearch.Close()
@@ -1564,7 +1570,7 @@ func TestGatewayValidationErrors(t *testing.T) {
 		{name: "name too long", method: http.MethodPost, path: "/ingest/" + longIndexName, contentType: "application/json", body: `{"event_time":"2024-12-30T10:11:12Z"}`, wantStatus: http.StatusBadRequest},
 	}
 
-	gateway := testGatewayHandlerWithAuth(testConfig(openSearch), func(username, password string) (*User, []Access, error) {
+	gateway := testGatewayHandlerWithAuth(testConfig(openSearch), func(username, _ string) (*User, []Access, error) {
 		return &User{Name: username, Namespace: "orders"}, []Access{
 			{Group: "orders_rw", Namespace: "orders"},
 			{Group: longNamespace + "_rw", Namespace: longNamespace},
@@ -1591,6 +1597,7 @@ func TestGatewayValidationErrors(t *testing.T) {
 	}
 }
 
+//nolint:funlen // Error-mapping cases are kept together for consistent gateway assertions.
 func TestGatewayOpenSearchFailuresReturnBadGateway(t *testing.T) {
 	t.Parallel()
 
@@ -1673,7 +1680,7 @@ func TestGatewayTenantFailureReturnsBadGateway(t *testing.T) {
 	}))
 	defer openSearch.Close()
 
-	dashboards := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	dashboards := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected Dashboards request: %s %s", r.Method, r.URL.RequestURI())
 	}))
 	defer dashboards.Close()
@@ -1743,6 +1750,7 @@ func TestGatewayDataViewFailureReturnsBadGateway(t *testing.T) {
 	}
 }
 
+//nolint:gocognit,cyclop,funlen // Conflict retry scenario needs sequential request assertions.
 func TestGatewayBootstrapConflictRetriesAliasCheck(t *testing.T) {
 	t.Parallel()
 

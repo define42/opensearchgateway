@@ -12,6 +12,7 @@ import (
 	"time"
 )
 
+//nolint:cyclop // Cache behavior test keeps the hit, miss, and expiry assertions together.
 func TestIngestAuthCacheCachesSuccessfulLookups(t *testing.T) {
 	t.Parallel()
 
@@ -101,6 +102,7 @@ func TestIngestAuthCacheExpiresEntries(t *testing.T) {
 	}
 }
 
+//nolint:gocognit // Concurrent cache miss test keeps goroutine coordination visible.
 func TestIngestAuthCacheDeduplicatesConcurrentMisses(t *testing.T) {
 	t.Parallel()
 
@@ -176,7 +178,7 @@ func TestGatewayIngestBasicAuthUsesLDAPCache(t *testing.T) {
 	defer openSearch.Close()
 
 	var authCalls atomic.Int32
-	gateway := newGateway(newClient(testConfig(openSearch)), func(username, password string) (*User, []Access, error) {
+	gateway := newGateway(newClient(testConfig(openSearch)), func(username, _ string) (*User, []Access, error) {
 		authCalls.Add(1)
 		return &User{Name: username, Namespace: "team10"}, []Access{
 			{Group: "team10_rw", Namespace: "team10"},
@@ -259,12 +261,12 @@ func TestIngestAuthCacheForgetUserEvictsEntries(t *testing.T) {
 func TestGatewayLogoutEvictsIngestAuthCache(t *testing.T) {
 	t.Parallel()
 
-	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	openSearch := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
 	}))
 	defer openSearch.Close()
 
-	gateway := newGateway(newClient(testConfig(openSearch)), func(username, password string) (*User, []Access, error) {
+	gateway := newGateway(newClient(testConfig(openSearch)), func(username, _ string) (*User, []Access, error) {
 		return &User{Name: username}, []Access{{Group: "team10_rw", Namespace: "team10"}}, nil
 	})
 
@@ -299,13 +301,13 @@ func TestGatewayLogoutEvictsIngestAuthCache(t *testing.T) {
 func TestGatewayIngestBasicAuthDoesNotCacheAuthenticationErrors(t *testing.T) {
 	t.Parallel()
 
-	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	openSearch := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
 	}))
 	defer openSearch.Close()
 
 	var authCalls atomic.Int32
-	gateway := newGateway(newClient(testConfig(openSearch)), func(username, password string) (*User, []Access, error) {
+	gateway := newGateway(newClient(testConfig(openSearch)), func(_, _ string) (*User, []Access, error) {
 		authCalls.Add(1)
 		return nil, nil, errLDAPInvalidCredentials
 	})

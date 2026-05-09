@@ -110,4 +110,3 @@ func (c *Client) NewRequestForBase(ctx context.Context, baseURL, method, path st
 	}
 	return req, nil
 }
-

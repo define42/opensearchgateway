@@ -7,6 +7,7 @@ import (
 	"time"
 )
 
+//nolint:funlen // Table-driven LDAP permission cases are easier to audit in one table.
 func TestPermissionsFromGroup(t *testing.T) {
 	t.Parallel()
 

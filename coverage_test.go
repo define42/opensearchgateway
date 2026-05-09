@@ -57,7 +57,7 @@ func TestRunReturnsBootstrapFailures(t *testing.T) {
 		defer openSearch.Close()
 
 		calledServe := false
-		err := run(context.Background(), testConfig(openSearch), func(handler http.Handler) error {
+		err := run(context.Background(), testConfig(openSearch), func(_ http.Handler) error {
 			calledServe = true
 			return nil
 		})
@@ -86,7 +86,7 @@ func TestRunReturnsBootstrapFailures(t *testing.T) {
 		defer openSearch.Close()
 
 		calledServe := false
-		err := run(context.Background(), testConfig(openSearch), func(handler http.Handler) error {
+		err := run(context.Background(), testConfig(openSearch), func(_ http.Handler) error {
 			calledServe = true
 			return nil
 		})
@@ -233,6 +233,7 @@ func TestGatewayDashboardsCoverage(t *testing.T) {
 	})
 }
 
+//nolint:gocognit,funlen // Coverage table exercises multiple login failure branches in one place.
 func TestHandleLoginSubmitCoverage(t *testing.T) {
 	t.Run("parse form failure", func(t *testing.T) {
 		gateway := testGatewayHandler(Config{})
@@ -293,7 +294,7 @@ func TestHandleLoginSubmitCoverage(t *testing.T) {
 		}))
 		defer dashboards.Close()
 
-		gateway := testGatewayHandlerWithAuth(testConfigWithDashboards(openSearch, dashboards), func(username, password string) (*User, []Access, error) {
+		gateway := testGatewayHandlerWithAuth(testConfigWithDashboards(openSearch, dashboards), func(username, _ string) (*User, []Access, error) {
 			return &User{Name: username, Namespace: "team1"}, []Access{
 				{Group: "team1_rw", Namespace: "team1"},
 			}, nil
@@ -320,7 +321,7 @@ func TestHandleLoginSubmitCoverage(t *testing.T) {
 	})
 }
 
-func TestRenderLoginPageWriterFailure(t *testing.T) {
+func TestRenderLoginPageWriterFailure(_ *testing.T) {
 	gateway := testGatewayHandler(Config{}).(*http.ServeMux)
 	_ = gateway
 
@@ -338,6 +339,7 @@ func TestDecodeJSONObjectCoverage(t *testing.T) {
 	}
 }
 
+//nolint:gocognit,funlen // Coverage subtests intentionally collect security helper edge cases.
 func TestProvisionAndSecurityHelpersCoverage(t *testing.T) {
 	t.Run("provision login user without access", func(t *testing.T) {
 		client := newClient(Config{})
@@ -365,7 +367,7 @@ func TestProvisionAndSecurityHelpersCoverage(t *testing.T) {
 	})
 
 	t.Run("ensure internal user writable missing user info", func(t *testing.T) {
-		openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"other":{"reserved":false,"hidden":false}}`)
 		}))
@@ -378,7 +380,7 @@ func TestProvisionAndSecurityHelpersCoverage(t *testing.T) {
 	})
 
 	t.Run("ensure internal user writable hidden user", func(t *testing.T) {
-		openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"alice":{"reserved":false,"hidden":true}}`)
 		}))
@@ -392,7 +394,7 @@ func TestProvisionAndSecurityHelpersCoverage(t *testing.T) {
 	})
 
 	t.Run("ensure security role failure", func(t *testing.T) {
-		openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			http.Error(w, `{"error":"role failed"}`, http.StatusInternalServerError)
 		}))
 		defer openSearch.Close()
@@ -425,6 +427,7 @@ func TestProvisionAndSecurityHelpersCoverage(t *testing.T) {
 	})
 }
 
+//nolint:gocognit,cyclop,funlen // Coverage subtests intentionally group related dashboard client branches.
 func TestTenantAndDashboardsClientCoverage(t *testing.T) {
 	t.Run("ensure tenant without dashboards url is noop", func(t *testing.T) {
 		client := newClient(Config{})
@@ -434,7 +437,7 @@ func TestTenantAndDashboardsClientCoverage(t *testing.T) {
 	})
 
 	t.Run("ensure tenant cached skip", func(t *testing.T) {
-		openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		openSearch := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}))
 		defer openSearch.Close()
@@ -478,7 +481,7 @@ func TestTenantAndDashboardsClientCoverage(t *testing.T) {
 	})
 
 	t.Run("set dashboards default index failure", func(t *testing.T) {
-		dashboards := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dashboards := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			http.Error(w, `{"error":"nope"}`, http.StatusInternalServerError)
 		}))
 		defer dashboards.Close()
@@ -613,7 +616,7 @@ func TestTenantAndDashboardsClientCoverage(t *testing.T) {
 
 func TestClientHelperCoverage(t *testing.T) {
 	t.Run("alias exists returns response error on unexpected status", func(t *testing.T) {
-		openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			http.Error(w, `{"error":"alias check failed"}`, http.StatusInternalServerError)
 		}))
 		defer openSearch.Close()
@@ -632,7 +635,7 @@ func TestClientHelperCoverage(t *testing.T) {
 
 	t.Run("do json with request returns marshal error", func(t *testing.T) {
 		client := newClient(Config{HTTPClient: http.DefaultClient})
-		err := client.doJSONWithRequest(context.Background(), http.MethodPost, "/broken", map[string]any{"bad": make(chan int)}, nil, []int{http.StatusOK}, func(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
+		err := client.doJSONWithRequest(context.Background(), http.MethodPost, "/broken", map[string]any{"bad": make(chan int)}, nil, []int{http.StatusOK}, func(_ context.Context, _, _ string, _ io.Reader) (*http.Request, error) {
 			t.Fatal("request builder should not be called when json marshal fails")
 			return nil, nil
 		})
@@ -644,7 +647,7 @@ func TestClientHelperCoverage(t *testing.T) {
 	t.Run("do json with request returns builder error", func(t *testing.T) {
 		client := newClient(Config{HTTPClient: http.DefaultClient})
 		wantErr := errors.New("build failed")
-		err := client.doJSONWithRequest(context.Background(), http.MethodGet, "/broken", nil, nil, []int{http.StatusOK}, func(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
+		err := client.doJSONWithRequest(context.Background(), http.MethodGet, "/broken", nil, nil, []int{http.StatusOK}, func(_ context.Context, _, _ string, _ io.Reader) (*http.Request, error) {
 			return nil, wantErr
 		})
 		if !errors.Is(err, wantErr) {
@@ -737,7 +740,7 @@ func (w *failingResponseWriter) WriteHeader(status int) {
 	w.status = status
 }
 
-func (w *failingResponseWriter) Write(p []byte) (int, error) {
+func (w *failingResponseWriter) Write(_ []byte) (int, error) {
 	return 0, errors.New("write failed")
 }
 
@@ -745,7 +748,7 @@ type errorReader struct {
 	err error
 }
 
-func (r errorReader) Read(p []byte) (int, error) {
+func (r errorReader) Read(_ []byte) (int, error) {
 	if r.err == nil {
 		return 0, io.ErrUnexpectedEOF
 	}

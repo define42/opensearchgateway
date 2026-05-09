@@ -1,3 +1,4 @@
+// Package main contains compatibility shims for tests.
 package main
 
 import (
