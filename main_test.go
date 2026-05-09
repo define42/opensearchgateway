@@ -770,7 +770,7 @@ func TestGatewayLoginSuccessProvisionsUserAndSession(t *testing.T) {
 		t.Fatalf("unexpected allowed actions: %#v", got)
 	}
 	resolvePermission := nestedMap(t, indexPermissions[1])
-	if got := resolvePermission["index_patterns"]; !reflect.DeepEqual(got, []any{"*"}) {
+	if got := resolvePermission["index_patterns"]; !reflect.DeepEqual(got, []any{"team1-*"}) {
 		t.Fatalf("unexpected resolve index patterns: %#v", got)
 	}
 	if got := resolvePermission["allowed_actions"]; !reflect.DeepEqual(got, []any{"indices:admin/resolve/index"}) {
@@ -918,7 +918,7 @@ func TestRoleRequestForAccessModes(t *testing.T) {
 			if got := role.IndexPermissions[0].AllowedActions; !reflect.DeepEqual(got, tt.wantAllowed) {
 				t.Fatalf("unexpected allowed actions: %#v", got)
 			}
-			if got := role.IndexPermissions[1].IndexPatterns; !reflect.DeepEqual(got, []string{"*"}) {
+			if got := role.IndexPermissions[1].IndexPatterns; !reflect.DeepEqual(got, []string{"team1-*"}) {
 				t.Fatalf("unexpected resolve index patterns: %#v", got)
 			}
 			if got := role.IndexPermissions[1].AllowedActions; !reflect.DeepEqual(got, []string{"indices:admin/resolve/index"}) {

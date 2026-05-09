@@ -83,7 +83,7 @@ func RoleRequestForAccess(access authz.Access) SecurityRoleRequest {
 				AllowedActions: authz.AllowedActionsForAccess(mode),
 			},
 			{
-				IndexPatterns:  []string{"*"},
+				IndexPatterns:  []string{BuildDataViewPattern(access.Namespace)},
 				AllowedActions: []string{"indices:admin/resolve/index"},
 			},
 		},
