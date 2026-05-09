@@ -4,10 +4,10 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/define42/opensearchgateway)](https://goreportcard.com/report/github.com/define42/opensearchgateway)
 [![Build Status](https://github.com/define42/opensearchgateway/actions/workflows/build.yml/badge.svg)](https://github.com/define42/opensearchgateway/actions/)
 
-OpenSearchGateway is an opinionated tenancy and ingest gateway for OpenSearch.
+OpenSearchGateway is a compliance-oriented tenancy and ingest gateway for OpenSearch.
 It turns LDAP group membership into OpenSearch Security roles, OpenSearch Dashboards tenants, and namespace-scoped ingest permissions.
 
-The central idea is that users do not get arbitrary OpenSearch access.
+The compliance boundary is simple: users do not get arbitrary OpenSearch access.
 They are forced into one or more namespace tenants, and every namespace comes from LDAP.
 A namespace controls:
 
@@ -19,7 +19,7 @@ A namespace controls:
 For example, LDAP group `team10_r` gives read-only access to the `team10` namespace.
 LDAP group `team10_rw` gives read and write access to `team10`, including ingest paths such as `POST /ingest/team10-hello`.
 
-## Opinionated Access Model
+## Compliance Access Model
 
 LDAP groups are the source of truth.
 The gateway reads group names from `LDAP_GROUP_ATTRIBUTE`, keeps only groups matching `LDAP_GROUP_PREFIX`, and maps suffixes to permissions:
@@ -46,7 +46,7 @@ If two namespaces could match the same ingest path, the longest namespace wins, 
 Duplicate groups for the same namespace collapse to the strongest permission.
 For example, `team10_r` plus `team10_rw` becomes write-capable access to `team10`.
 
-## Opinionated Ingest Model
+## Compliance Ingest Model
 
 All writes use the same route shape:
 
