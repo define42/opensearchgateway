@@ -130,12 +130,6 @@ func ResolveIngestWriteNamespace(access []Access, indexName string) (string, boo
 	return bestNamespace, true
 }
 
-// HasIngestWriteAccess reports whether access permits writes to indexName.
-func HasIngestWriteAccess(access []Access, indexName string) bool {
-	_, ok := ResolveIngestWriteNamespace(access, indexName)
-	return ok
-}
-
 // RoleModeForAccess converts access into the gateway's role suffix.
 func RoleModeForAccess(access Access) string {
 	switch {
