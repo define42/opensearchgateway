@@ -41,10 +41,6 @@ func (s *Store) Create(data Data) (string, time.Time, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.sessions == nil {
-		s.sessions = make(map[string]Data)
-	}
-
 	now := time.Now()
 	expiresAt := now.Add(idleTTL)
 	data.CreatedAt = now

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 )
 
@@ -53,7 +54,7 @@ func (c *Client) DoJSONWithRequest(ctx context.Context, method, path string, bod
 		_ = resp.Body.Close()
 	}()
 
-	if !containsStatus(okStatuses, resp.StatusCode) {
+	if !slices.Contains(okStatuses, resp.StatusCode) {
 		b, _ := io.ReadAll(resp.Body)
 		return &ResponseError{
 			Method:     method,
@@ -110,11 +111,3 @@ func (c *Client) NewRequestForBase(ctx context.Context, baseURL, method, path st
 	return req, nil
 }
 
-func containsStatus(ok []int, code int) bool {
-	for _, s := range ok {
-		if s == code {
-			return true
-		}
-	}
-	return false
-}
