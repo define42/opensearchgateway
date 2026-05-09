@@ -145,6 +145,8 @@ Common responses:
 
 Clears the session cookie and forgets this instance's cached ingest credentials for the logged-in user.
 
+OpenSearch Dashboards logout requests under `/dashboards/auth/logout`, `/dashboards/logout`, and `/dashboards/api/security/logout` are handled the same way before they are proxied upstream, so the Dashboards sign-out control clears the gateway session too.
+
 ### `/dashboards`
 
 ### `/dashboards/*`

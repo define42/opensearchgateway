@@ -1231,6 +1231,61 @@ func TestGatewayLogoutClearsSession(t *testing.T) {
 	}
 }
 
+func TestGatewayDashboardsLogoutClearsGatewaySession(t *testing.T) {
+	t.Parallel()
+
+	openSearch := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer openSearch.Close()
+
+	dashboards := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Fatalf("Dashboards logout should be handled by gateway, got upstream request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer dashboards.Close()
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{name: "auth logout get", method: http.MethodGet, path: "/dashboards/auth/logout?nextUrl=%2Fdashboards%2Fapp%2Fhome"},
+		{name: "auth logout post", method: http.MethodPost, path: "/dashboards/auth/logout"},
+		{name: "legacy logout", method: http.MethodGet, path: "/dashboards/logout"},
+		{name: "api security logout", method: http.MethodPost, path: "/dashboards/api/security/logout"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gateway := newTestGateway(opensearchpkg.NewClient(testConfigWithDashboards(openSearch, dashboards)), nil)
+			encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, serverpkg.Session{
+				User:       &authzpkg.User{Name: "testuser"},
+				AuthHeader: serverpkg.BuildBasicAuthorization("testuser", "dogood"),
+			})
+
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(tt.method, tt.path, nil)
+			request.AddCookie(&http.Cookie{Name: serverpkg.SessionCookieName, Value: encoded, Expires: expiresAt})
+
+			gateway.Handler().ServeHTTP(recorder, request)
+
+			if recorder.Code != http.StatusSeeOther {
+				t.Fatalf("expected logout redirect, got %d: %s", recorder.Code, recorder.Body.String())
+			}
+			if got := recorder.Header().Get("Location"); got != "/login" {
+				t.Fatalf("expected redirect to /login, got %q", got)
+			}
+			clearedCookie := findCookie(recorder.Result().Cookies(), serverpkg.SessionCookieName)
+			if clearedCookie == nil {
+				t.Fatal("expected logout response to clear gateway session cookie")
+			}
+			if clearedCookie.Value != "" || clearedCookie.MaxAge >= 0 {
+				t.Fatalf("expected clearing cookie, got value=%q MaxAge=%d", clearedCookie.Value, clearedCookie.MaxAge)
+			}
+		})
+	}
+}
+
 func findCookie(cookies []*http.Cookie, name string) *http.Cookie {
 	for _, c := range cookies {
 		if c.Name == name {

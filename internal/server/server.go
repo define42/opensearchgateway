@@ -193,6 +193,11 @@ func (g *Gateway) HandleDashboards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if isDashboardsLogoutPath(r.URL.Path) {
+		g.handleDashboardsLogout(w, r)
+		return
+	}
+
 	sessionData, ok := g.currentSession(r)
 	if !ok {
 		g.clearSessionCookie(w, r)
@@ -202,6 +207,31 @@ func (g *Gateway) HandleDashboards(w http.ResponseWriter, r *http.Request) {
 
 	if err := g.proxyDashboards(w, r, sessionData); err != nil {
 		writeErrorJSON(w, http.StatusBadGateway, fmt.Sprintf("Dashboards proxy failed: %v", err))
+	}
+}
+
+func (g *Gateway) handleDashboardsLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
+		writeErrorJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	if sessionData, ok := g.currentSession(r); ok && sessionData.User != nil {
+		g.IngestAuthCache.ForgetUser(sessionData.User.Name)
+	}
+
+	g.clearSessionCookie(w, r)
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
+}
+
+func isDashboardsLogoutPath(path string) bool {
+	path = strings.TrimSuffix(path, "/")
+	switch path {
+	case "/dashboards/auth/logout", "/dashboards/logout", "/dashboards/api/security/logout":
+		return true
+	default:
+		return false
 	}
 }
 
