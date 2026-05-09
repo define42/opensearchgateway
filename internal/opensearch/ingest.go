@@ -147,7 +147,14 @@ func (c *Client) AttachISMPolicy(ctx context.Context, indexName, policyID string
 	}
 
 	path := "/_plugins/_ism/add/" + url.PathEscape(indexName)
-	return c.DoJSON(ctx, http.MethodPost, path, body, nil, []int{http.StatusOK, http.StatusCreated})
+	var response ISMAddPolicyResponse
+	if err := c.DoJSON(ctx, http.MethodPost, path, body, &response, []int{http.StatusOK, http.StatusCreated}); err != nil {
+		return err
+	}
+	if response.Failures {
+		return fmt.Errorf("ISM add policy %q failed for indices: %s", policyID, strings.Join(response.FailedIndices, ", "))
+	}
+	return nil
 }
 
 // AliasExists checks whether alias currently exists in OpenSearch.

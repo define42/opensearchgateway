@@ -137,6 +137,13 @@ type ISMPolicyResponse struct {
 	Policy      ISMPolicy `json:"policy"`
 }
 
+// ISMAddPolicyResponse captures the status of assigning a policy to indices.
+type ISMAddPolicyResponse struct {
+	UpdatedIndices int      `json:"updated_indices"`
+	Failures       bool     `json:"failures"`
+	FailedIndices  []string `json:"failed_indices"`
+}
+
 // ISMPolicy describes an index state management policy.
 type ISMPolicy struct {
 	Description  string     `json:"description"`

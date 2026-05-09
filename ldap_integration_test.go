@@ -74,7 +74,7 @@ func TestLDAPIngestUserCanIngestTeam10(t *testing.T) {
 			_, _ = io.WriteString(w, `{}`)
 		case "POST /_plugins/_ism/add/team10-hello-20241230-rollover-000001":
 			w.WriteHeader(http.StatusCreated)
-			_, _ = io.WriteString(w, `{}`)
+			_, _ = io.WriteString(w, `{"updated_indices":1,"failures":false,"failed_indices":[]}`)
 		case "POST /team10-hello-20241230-rollover/_doc":
 			indexedDocument = decodeRequestBody(t, r)
 			indexedDocuments++

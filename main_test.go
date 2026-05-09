@@ -1592,6 +1592,51 @@ func TestEnsureWriteAliasRepairsExistingAliasPolicy(t *testing.T) {
 	}
 }
 
+func TestEnsureWriteAliasRejectsFailedISMAddPolicyResponse(t *testing.T) {
+	t.Parallel()
+
+	var calls []string
+	openSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+
+		switch r.Method + " " + r.URL.Path {
+		case "HEAD /_alias/orders-demo-20241230-rollover":
+			w.WriteHeader(http.StatusOK)
+		case "GET /_alias/orders-demo-20241230-rollover":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"orders-demo-20241230-rollover-000001":{"aliases":{"orders-demo-20241230-rollover":{"is_write_index":true}}}}`)
+		case "POST /_plugins/_ism/add/orders-demo-20241230-rollover-000001":
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"updated_indices":0,"failures":true,"failed_indices":["orders-demo-20241230-rollover-000001"]}`)
+		default:
+			t.Fatalf("unexpected OpenSearch request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer openSearch.Close()
+
+	client := newClient(testConfig(openSearch))
+	bootstrapped, err := client.EnsureWriteAlias(context.Background(), "orders-demo-20241230-rollover")
+	if err == nil {
+		t.Fatal("expected EnsureWriteAlias to reject failed ISM add-policy response")
+	}
+	if bootstrapped {
+		t.Fatal("failed repair should not report bootstrap")
+	}
+	if !strings.Contains(err.Error(), "orders-demo-20241230-rollover-000001") {
+		t.Fatalf("expected failed index in error, got %v", err)
+	}
+	if _, cached := client.EnsuredAliasPolicies.Load("orders-demo-20241230-rollover"); cached {
+		t.Fatal("failed policy repair must not be cached")
+	}
+	if !reflect.DeepEqual(calls, []string{
+		"HEAD /_alias/orders-demo-20241230-rollover",
+		"GET /_alias/orders-demo-20241230-rollover",
+		"POST /_plugins/_ism/add/orders-demo-20241230-rollover-000001",
+	}) {
+		t.Fatalf("unexpected repair calls: %#v", calls)
+	}
+}
+
 func TestGatewayValidationErrors(t *testing.T) {
 	t.Parallel()
 

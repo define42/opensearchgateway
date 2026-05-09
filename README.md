@@ -4,88 +4,121 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/define42/opensearchgateway)](https://goreportcard.com/report/github.com/define42/opensearchgateway)
 [![Build Status](https://github.com/define42/opensearchgateway/actions/workflows/build.yml/badge.svg)](https://github.com/define42/opensearchgateway/actions/)
 
-OpenSearchGateway is a small Go web server that sits in front of an OpenSearch cluster and does two jobs:
+OpenSearchGateway is an opinionated tenancy and ingest gateway for OpenSearch.
+It turns LDAP group membership into OpenSearch Security roles, OpenSearch Dashboards tenants, and namespace-scoped ingest permissions.
 
-- it turns simple JSON HTTP writes into rollover-friendly OpenSearch documents
-- it fronts OpenSearch Dashboards with an LDAP-backed login flow and per-user OpenSearch provisioning
+The central idea is that users do not get arbitrary OpenSearch access.
+They are forced into one or more namespace tenants, and every namespace comes from LDAP.
+A namespace controls:
 
-It is designed for a very specific ingestion model:
+- which Dashboards tenant the user can open
+- which index patterns the user can see
+- which ingest paths the user can write to
+- which OpenSearch Security role the gateway creates for the user
 
-- clients send JSON to `POST /ingest/<namespace>-<index>`
-- clients authenticate to `/ingest` with LDAP credentials or an existing gateway session
-- every document must contain a top-level `event_time`
-- the gateway derives a daily write alias from that timestamp
-- OpenSearch writes go through rollover aliases and backing indices
-- OpenSearch Dashboards gets namespace tenants and matching data views automatically
-- LDAP users can sign in through the gateway and reach Dashboards without exposing the admin account
+For example, LDAP group `team10_r` gives read-only access to the `team10` namespace.
+LDAP group `team10_rw` gives read and write access to `team10`, including ingest paths such as `POST /ingest/team10-hello`.
 
-In short, this project gives you a thin HTTP ingest layer and a thin web access layer in front of OpenSearch, with just enough bootstrap logic to make daily rollover-based indexing, tenant-aware Dashboards discovery, and LDAP-backed Dashboards access work without manual setup for each new index family.
+## Opinionated Access Model
 
-## What It Does
+LDAP groups are the source of truth.
+The gateway reads group names from `LDAP_GROUP_ATTRIBUTE`, keeps only groups matching `LDAP_GROUP_PREFIX`, and maps suffixes to permissions:
 
-When the gateway starts, it bootstraps shared cluster resources:
+| LDAP group | Namespace | Dashboards tenant | OpenSearch index pattern | Ingest |
+| --- | --- | --- | --- | --- |
+| `<namespace>_r` | `<namespace>` | tenant access | read on `<namespace>-*` | no |
+| `<namespace>_rd` | `<namespace>` | tenant access | read and delete on `<namespace>-*` | no |
+| `<namespace>_rw` | `<namespace>` | tenant access | read and write on `<namespace>-*` | yes |
+| `<namespace>_rwd` | `<namespace>` | tenant access | read, write, and delete on `<namespace>-*` | yes |
 
-- ensures the ISM policy `generic-rollover-100m` exists
-- ensures a shared index template exists for rollover backing indices
-- starts an HTTP server on `LISTEN_ADDR` (default `:8080`)
+When a user logs in, the gateway provisions the matching OpenSearch resources:
 
-When a user signs in through `POST /login`, the gateway:
+- Dashboards tenant named exactly like the namespace, such as `team10`
+- Dashboards data view for the namespace, such as `team10-*`
+- OpenSearch Security role named `gateway_<namespace>_<mode>`
+- OpenSearch internal user for the login session
+- built-in `kibana_user` role plus the generated namespace roles
 
-1. validates the submitted username and password against LDAP
-2. derives namespace access from LDAP groups like `<namespace>_r`, `<namespace>_rw`, and `<namespace>_rwd`
-3. ensures a matching OpenSearch Security role for each namespace
-4. ensures a tenant and data view exist for each namespace
-5. creates or replaces the internal OpenSearch user with the same username and password semantics
-6. stores a short-lived server-side session
-7. reverse proxies OpenSearch Dashboards under `/dashboards` using the logged-in user's basic auth
+Multiple groups mean multiple namespaces.
+A user in `team10_r` and `team20_rw` can browse both tenants, can write to `team20-*`, and cannot write to `team10-*`.
+If two namespaces could match the same ingest path, the longest namespace wins, so `team10_rw` is preferred over `team_rw` for `/ingest/team10-hello`.
 
-When a client sends a document to `POST /ingest/<namespace>-<index>`, the gateway:
+Duplicate groups for the same namespace collapse to the strongest permission.
+For example, `team10_r` plus `team10_rw` becomes write-capable access to `team10`.
 
-1. validates the path and prefixed index-family name
-2. requires LDAP-backed authentication, either through HTTP Basic auth or an existing gateway session
-3. checks that the authenticated user has write access to the namespace prefix
-4. requires `Content-Type: application/json`
-5. parses the body as a single JSON object
-6. requires top-level `event_time` as a UTC RFC3339 string ending in `Z`
-7. derives the write alias as:
+## Opinionated Ingest Model
+
+All writes use the same route shape:
+
+```text
+POST /ingest/<namespace>-<index>
+```
+
+The namespace prefix is not decoration.
+It is the authorization boundary.
+The gateway accepts an ingest request only when the authenticated user has write-capable LDAP access for the namespace at the front of the path.
+
+Every document must contain top-level UTC `event_time`.
+That timestamp controls the daily rollover alias:
 
 ```text
 <namespace>-<index>-YYYYMMDD-rollover
 ```
 
-8. ensures an OpenSearch Security tenant named after the owning namespace
-9. ensures an OpenSearch Dashboards data view inside that tenant with pattern:
+For:
 
 ```text
-<namespace>-<index>-*
+POST /ingest/team10-hello
+event_time = 2024-12-30T10:11:12Z
 ```
 
-10. checks whether the daily write alias exists
-11. if missing, creates the first backing index:
+the gateway creates or uses:
 
 ```text
-<namespace>-<index>-YYYYMMDD-rollover-000001
+tenant:        team10
+data view:     team10-hello-*
+write alias:   team10-hello-20241230-rollover
+backing index: team10-hello-20241230-rollover-000001
 ```
 
-12. attaches the rollover alias and ISM policy
-13. indexes the document through the alias
-14. returns a compact JSON response describing the write
+## How It Works
 
-## Why This Exists
+At startup, the gateway bootstraps shared OpenSearch resources:
 
-This gateway is useful when you want:
+- ISM policy `generic-rollover-100m`
+- index template `gateway-rollover-template`
+- template index pattern `*-*-rollover-*`
+- `event_time` mapping as an OpenSearch `date`
+- hard-coded template shard settings of `2` shards and `2` replicas
 
-- a very simple HTTP ingest interface instead of exposing OpenSearch directly
-- deterministic daily alias naming based on an event timestamp
-- rollover-compatible index creation
-- automatic Dashboards setup for each logical index family
-- LDAP-backed sign-in for Dashboards without giving end users the admin credential
-- namespace-scoped OpenSearch users and Dashboards tenants derived from LDAP groups
-- a lightweight developer stack you can run locally with Docker Compose
+At login, the gateway:
 
-It is especially handy for internal tools, demos, prototypes, and ingestion pipelines where producers should not need to know OpenSearch index template, alias, tenant, or Dashboards setup details.
+1. binds to LDAP with the submitted credentials
+2. looks up the LDAP user and group memberships
+3. maps matching LDAP groups to namespace access
+4. upserts one OpenSearch Security role per namespace and mode
+5. ensures a Dashboards tenant and namespace-level data view
+6. creates or replaces an OpenSearch internal user for that username
+7. generates a random per-login OpenSearch password for that internal user
+8. stores an encrypted, signed gateway session cookie
+9. proxies `/dashboards` with the generated internal-user Basic auth header
 
-## HTTP Interface
+The LDAP password is not stored in OpenSearch. The internal OpenSearch user gets a generated password for the current login session.
+
+At ingest time, the gateway:
+
+1. validates the route as `/ingest/<namespace>-<index>`
+2. authenticates with Basic auth or an existing gateway session
+3. checks that the user can write to the namespace prefix
+4. requires `Content-Type: application/json`
+5. decodes exactly one JSON object
+6. validates `event_time`
+7. ensures the Dashboards tenant and data view
+8. ensures the daily rollover alias exists
+9. repairs ISM policy attachment on existing write aliases when needed
+10. indexes the document through the alias
+
+## HTTP API
 
 ### `GET /`
 
@@ -93,375 +126,325 @@ Redirects to `/login`.
 
 ### `GET /login`
 
-Serves the gateway login page.
+Renders the login page. If the request already has a valid session cookie, it redirects to `/dashboards/app/home`.
 
 ### `POST /login`
 
-Authenticates the submitted LDAP credentials, provisions the user's OpenSearch roles and internal user, creates a gateway session, and redirects to `/dashboards/app/home` on success.
+Authenticates against LDAP, provisions OpenSearch and Dashboards resources, sets the session cookie, and redirects to Dashboards.
 
-Login responses:
+Common responses:
 
-- `303` on success
-- `401` for invalid username or password
-- `403` when LDAP auth succeeds but no authorized namespace groups are present, or when the target OpenSearch internal user is reserved/hidden
-- `502` when LDAP, OpenSearch Security API, or Dashboards provisioning fails
+| Status | Meaning |
+| --- | --- |
+| `303` | login succeeded |
+| `401` | missing or invalid credentials |
+| `403` | LDAP user is valid but has no gateway namespace access, or the matching OpenSearch internal user is reserved or hidden |
+| `502` | LDAP, OpenSearch, or Dashboards provisioning failed |
 
 ### `POST /logout`
 
-Clears the gateway session and redirects back to `/login`.
+Clears the session cookie and forgets this instance's cached ingest credentials for the logged-in user.
 
-### `GET /dashboards`
-### `GET /dashboards/*`
+### `/dashboards`
 
-Reverse proxies OpenSearch Dashboards through the gateway. These routes require a valid gateway session. The gateway injects the logged-in user's basic auth header on proxied requests and refreshes the session idle timeout while Dashboards is in use.
+### `/dashboards/*`
+
+Reverse proxies OpenSearch Dashboards. A valid gateway session is required. All Dashboards HTTP methods are passed through to the upstream service.
+
+The bundled Dashboards config uses `server.basePath: /dashboards`, which matches this proxy route.
 
 ### `GET /demo`
 
-Serves a small demo page where you can:
-
-- enter a namespace-prefixed index family
-- enter LDAP credentials when you want to ingest directly from the browser
-- paste a JSON document
-- submit it directly to the gateway from the browser
-
-If you are already signed in through `/login`, the demo page can also reuse that gateway session instead of sending explicit Basic auth credentials.
+Serves a small browser form for sending test ingest requests.
 
 ### `POST /ingest/<namespace>-<index>`
 
-Primary ingest endpoint. The path segment is the full logical index family and must include the owning namespace prefix.
+Writes one JSON document to OpenSearch.
 
-This endpoint now requires authentication. The gateway accepts either:
+Authentication can be either:
 
-- HTTP Basic auth with an LDAP username and password
-- an existing gateway session cookie created by `POST /login`
+- HTTP Basic auth with LDAP credentials
+- a gateway session cookie from `POST /login`
 
-For repeated Basic-authenticated ingest requests, the gateway keeps a process-local in-memory cache of successful LDAP auth results for 5 minutes. Active callers refresh that TTL on cache hits, while session-backed ingest continues to skip LDAP entirely.
+If an `Authorization` header is present, it must be valid Basic auth. If no `Authorization` header is present, the gateway falls back to the session cookie.
 
-Accepted path examples:
+Successful Basic-auth LDAP lookups are cached in memory for 5 minutes. Cache entries are keyed by a SHA-256 hash of `username:password`, and active callers refresh the TTL on cache hits.
+
+## Ingest Contract
+
+Valid paths look like this:
 
 ```text
-/ingest/orders-demo
-/ingest/orders-demo/
+/ingest/team10-hello
+/ingest/team10-hello/
 ```
 
-Rejected path examples:
+Invalid paths include:
 
 ```text
+/ingest
 /ingest/
-/ingest/orders/extra
-/ingest/Orders
+/ingest/team10/hello
+/ingest/Team10-hello
 ```
 
-Index names must:
+The path segment after `/ingest/` must:
 
 - start with a lowercase letter or digit
-- only contain lowercase letters, digits, `-`, and `_`
+- contain only lowercase letters, digits, `-`, and `_`
+- include the namespace prefix followed by `-`
+- stay within OpenSearch's 255-byte index name limit after alias expansion
 
-The generated alias and first backing index must also fit within OpenSearch index naming limits.
-
-### Ingest authorization model
-
-Successful LDAP authentication is not enough by itself. The user must also have write access to the target namespace.
-
-The gateway derives namespace access from LDAP groups using these suffixes:
-
-- `<namespace>_r`: read-only access
-- `<namespace>_rd`: read plus delete access
-- `<namespace>_rw`: read plus write access
-- `<namespace>_rwd`: full read, write, and delete access
-
-For ingest, only write-capable groups are accepted:
-
-- `<namespace>_rw`
-- `<namespace>_rwd`
-
-The ingest index name must be prefixed with that namespace as `<namespace>-<index>`.
-
-Examples:
-
-- a user in `team10_r` can open Dashboards for `team10`, but cannot ingest to `POST /ingest/team10-hello`
-- a user in `team10_rw` can ingest to `POST /ingest/team10-hello`
-- `POST /ingest/team10` is not accepted for ingest because it does not include a namespace-prefixed index suffix
-
-### Required document shape
-
-The request body must be a single JSON object with a top-level `event_time`.
-
-Example:
+The request body must be exactly one JSON object:
 
 ```json
 {
   "event_time": "2024-12-30T10:11:12Z",
-  "message": "hello",
-  "customer_id": 42,
-  "status": "received"
+  "message": "payment received",
+  "amount": 123.45
 }
 ```
 
-Rules for `event_time`:
+`event_time` rules:
 
-- must be present
-- must be a string
-- must be valid RFC3339
-- must be UTC and end in `Z`
+- required
+- string only
+- valid RFC3339
+- UTC only
+- must end in `Z`
 
-The gateway preserves the rest of the JSON body and normalizes `event_time` back into canonical UTC RFC3339 before indexing.
+The gateway normalizes `event_time` back to canonical UTC RFC3339 before indexing.
 
-### Success response
-
-Successful writes return `201 Created`.
-
-Example:
+Successful writes return `201 Created`:
 
 ```json
 {
   "result": "created",
-  "write_alias": "orders-demo-20241230-rollover",
+  "write_alias": "team10-hello-20241230-rollover",
   "document_id": "abc123",
   "bootstrapped": true
 }
 ```
 
-### Error behavior
+Common ingest errors:
 
-- `401` when `/ingest/<namespace>-<index>` is called without valid LDAP credentials
-- `403` when LDAP auth succeeds but the user does not have write access to that namespace
-- `400` for request validation errors
-- `405` for wrong HTTP methods
-- `415` for non-JSON requests
-- `502` when OpenSearch or Dashboards setup/indexing fails
+| Status | Meaning |
+| --- | --- |
+| `400` | bad path, malformed JSON, missing `event_time`, invalid timestamp, or generated name too long |
+| `401` | missing or invalid LDAP credentials/session |
+| `403` | user does not have write access to the target namespace |
+| `405` | unsupported method |
+| `415` | request is not `application/json` |
+| `502` | LDAP, Dashboards, OpenSearch bootstrap, or OpenSearch indexing failed |
 
-The gateway is strict about Dashboards setup for indexed families. If tenant or data-view creation fails, the request fails before any document is written.
+## Namespace Access
 
-## OpenSearch Naming Model
+LDAP groups drive all namespace permissions.
 
-For an ingest request like:
+The gateway reads group values from `LDAP_GROUP_ATTRIBUTE` and extracts the leading `cn=` or `ou=` value when the group value is a DN.
+Only group names that start with `LDAP_GROUP_PREFIX` are considered. The default prefix is `team`.
+
+Recognized suffixes:
+
+| Group suffix | OpenSearch access | Ingest writes |
+| --- | --- | --- |
+| `<namespace>_r` | read | no |
+| `<namespace>_rd` | read, delete | no |
+| `<namespace>_rw` | read, write | yes |
+| `<namespace>_rwd` | read, write, delete | yes |
+
+Namespace names may contain lowercase letters, digits, and `_`. They may not contain `-`, because `-` separates the namespace from the index family in ingest paths.
+
+Examples:
+
+- `team10_r` can browse the `team10` tenant but cannot ingest.
+- `team10_rw` can browse `team10` and ingest to paths such as `/ingest/team10-hello`.
+- `team10_rw` cannot ingest to `/ingest/team20-hello`.
+- A user in both `team10_rw` and `team20_rw` can write to both namespaces.
+- If memberships overlap, such as `team_rw` and `team10_rw`, the longest matching namespace wins for ingest paths.
+
+Duplicate memberships for the same namespace are merged to the strongest access.
+
+## OpenSearch And Dashboards Resources
+
+The gateway creates deterministic resource names.
+
+For:
 
 ```text
-POST /ingest/orders-demo
+POST /ingest/team10-hello
+event_time = 2024-12-30T10:11:12Z
 ```
 
-with:
+it uses:
 
-```json
-{
-  "event_time": "2024-12-30T10:11:12Z"
-}
-```
+| Resource | Name |
+| --- | --- |
+| Tenant | `team10` |
+| Data view ID | `gateway-index-pattern-team10-hello` |
+| Data view title | `team10-hello-*` |
+| Time field | `event_time` |
+| Write alias | `team10-hello-20241230-rollover` |
+| First backing index | `team10-hello-20241230-rollover-000001` |
 
-the gateway produces:
+New backing indices are created with:
 
-- tenant: `orders`
-- Dashboards data view pattern: `orders-demo-*`
-- write alias: `orders-demo-20241230-rollover`
-- first backing index: `orders-demo-20241230-rollover-000001`
+- alias `is_write_index: true`
+- `plugins.index_state_management.rollover_alias`
+- `plugins.index_state_management.policy_id`
 
-Writes always go through the alias, not directly to the backing index.
+For aliases that already exist, the gateway resolves the concrete write backing index and calls OpenSearch's ISM add-policy API for that index.
+The add-policy response is decoded, and `failures: true` is treated as a failed repair rather than cached as success.
 
-## Dashboards And LDAP Behavior
+## Configuration
 
-For every new index family, the gateway creates:
+Configuration is environment based.
 
-- an OpenSearch Security tenant named after the owning namespace
-- an OpenSearch Dashboards data view inside that tenant
+| Variable | Default | Description |
+| --- | --- | --- |
+| `LISTEN_ADDR` | `:8080` | Gateway bind address |
+| `OPENSEARCH_URL` | `https://localhost:9200` | OpenSearch API URL |
+| `OPENSEARCH_USERNAME` | `admin` | OpenSearch admin/API username |
+| `OPENSEARCH_PASSWORD` | `OPENSEARCH_ADMIN_PASSWORD` or empty | OpenSearch admin/API password |
+| `OPENSEARCH_ADMIN_PASSWORD` | empty | Convenience fallback used by Docker Compose and password defaults |
+| `OPENSEARCH_SKIP_TLS_VERIFY` | `false` | Disable OpenSearch TLS verification |
+| `DASHBOARDS_URL` | `http://localhost:5601` | OpenSearch Dashboards URL |
+| `DASHBOARDS_USERNAME` | `OPENSEARCH_USERNAME` or `admin` | Dashboards API username |
+| `DASHBOARDS_PASSWORD` | `OPENSEARCH_PASSWORD`, `OPENSEARCH_ADMIN_PASSWORD`, or empty | Dashboards API password |
+| `DASHBOARDS_TENANT` | `admin_tenant` | Default tenant for generic Dashboards API calls |
+| `LDAP_URL` | `ldaps://ldap:389` | LDAP server URL |
+| `LDAP_BASE_DN` | `dc=glauth,dc=com` | LDAP search base |
+| `LDAP_USER_FILTER` | `(mail=%s)` | User lookup filter; `%s` receives the login email |
+| `LDAP_GROUP_ATTRIBUTE` | `memberOf` | Attribute containing group memberships |
+| `LDAP_GROUP_PREFIX` | `team` | Prefix required for gateway-managed groups |
+| `LDAP_USER_DOMAIN` | `@example.com` | Domain appended to usernames without `@` before LDAP bind/search |
+| `LDAP_STARTTLS` | `false` | Start TLS after connecting to `ldap://` URLs |
+| `LDAP_SKIP_TLS_VERIFY` | `true` | Disable LDAP TLS verification |
 
-For every successful LDAP login, the gateway also:
+Production notes:
 
-- derives namespace access from LDAP group names
-- ensures one custom OpenSearch role per effective namespace access mode
-- creates or replaces the corresponding internal OpenSearch user
-- grants the built-in `kibana_user` role plus the namespace roles
+- Set `LDAP_SKIP_TLS_VERIFY=false` with trusted LDAP certificates.
+- Set `OPENSEARCH_SKIP_TLS_VERIFY=false` outside local self-signed development.
+- Run the gateway behind HTTPS so session cookies are sent with the `Secure` flag.
+- The session cookie codec uses random per-process keys. Restarting the gateway invalidates existing sessions.
+- Multiple gateway instances need shared cookie keys, but this repository does not currently expose shared-key configuration.
+- The gateway needs OpenSearch permissions to manage ISM policies, index templates, tenants, roles, internal users, and indices.
 
-That means:
+## Local Docker Demo
 
-- `orders-demo` data goes with the `orders` tenant
-- the Dashboards data view is created with title `orders-demo-*`
-- the time field is set to `event_time`
-- a user with LDAP groups `team1_rwd` and `team2_rw` gets roles that map to `team1-*` and `team2-*`
-
-This keeps data-view organization aligned with the ingest namespace while still letting each namespace own many concrete index families.
-After the first successful ingest for a concrete family, the gateway creates the concrete data view as a real Dashboards saved object, such as `team10-demo-*` inside the `team10` tenant, and caches that it has already checked that tenant/data-view pair.
-
-One important distinction:
-
-- OpenSearch data visibility is namespace-scoped and can be read-only
-- ingest requires write access for that same namespace
-
-So a user in `team10_r` can browse the `team10` tenant in Dashboards, while a user in `team10_rw` can both browse and ingest into index families such as `team10-hello`.
-
-## Local Development Stack
-
-The repository includes a full local stack in [docker-compose.yml](/home/define42/git/OpenSearchGateway/docker-compose.yml):
-
-- OpenSearch
-- OpenSearch Dashboards
-- OpenSearchGateway
-- GLAuth LDAP
-
-### Start the stack
+The repository includes a Compose stack for trying the gateway with OpenSearch, OpenSearch Dashboards, and GLAuth:
 
 ```bash
 docker compose up --build
 ```
 
-Or with the included [makefile](/home/define42/git/OpenSearchGateway/makefile):
+Or use the make target:
 
 ```bash
-make
+make run
 ```
 
-The compose stack exposes:
+The local stack exposes:
 
-- OpenSearch: `https://localhost:9200`
-- OpenSearch Dashboards: `http://localhost:5601`
-- OpenSearchGateway: `http://localhost:8080`
-- LDAP: `ldaps://localhost:389`
+| Service | URL |
+| --- | --- |
+| Gateway | `http://localhost:8080` |
+| OpenSearch | `https://localhost:9200` |
+| OpenSearch Dashboards | `http://localhost:5601/dashboards` |
+| GLAuth LDAP | `ldaps://localhost:389` |
 
-Default admin password in the local stack:
+The local OpenSearch admin password defaults to:
 
 ```text
 Cedar7!FluxOrbit29
 ```
 
-You can override it with:
+Override it before starting the stack:
 
 ```bash
 export OPENSEARCH_ADMIN_PASSWORD='your-strong-password'
 docker compose up --build
 ```
 
-The bundled LDAP config includes a demo user you can use against the gateway login page:
+The bundled LDAP fixture includes users that demonstrate the permission suffixes:
 
-```text
-username: testuser
-password: dogood
+| Username | Password | Groups | Result |
+| --- | --- | --- | --- |
+| `testuser` | `dogood` | `team1_rwd`, `team2_rw`, `team10_r` | multiple tenants with mixed permissions |
+| `ingestuser` | `dogood` | `team10_rw` | can write to `team10-*` ingest targets |
+| `johndoe` | `dogood` | `team10_r` | can browse `team10`, cannot ingest |
+
+Example write using the write-capable demo user:
+
+```bash
+curl -i http://localhost:8080/ingest/team10-hello \
+  -u ingestuser:dogood \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "event_time": "2024-12-30T10:11:12Z",
+    "message": "hello from the gateway",
+    "customer_id": 42
+  }'
 ```
 
-That user resolves to these namespace groups in the sample LDAP config:
+## Running Without Docker
 
-- `team1_rwd`
-- `team2_rw`
-- `team10_r`
-
-So after login, the gateway provisions access for `team1-*`, `team2-*`, and `team10-*`.
-
-The sample LDAP config also includes these useful ingest examples:
-
-```text
-username: johndoe
-password: dogood
-groups: team10_r
-```
-
-`johndoe` can sign in and browse the `team10` tenant, but cannot ingest into `team10-hello`.
-
-```text
-username: ingestuser
-password: dogood
-groups: team10_rw
-```
-
-`ingestuser` can ingest into `team10-hello` and also access the `team10` namespace in Dashboards.
-
-## Running the Gateway Without Docker
-
-Run it directly with Go:
+Run directly:
 
 ```bash
 go run .
 ```
 
-Useful environment variables:
-
-- `LISTEN_ADDR`
-- `OPENSEARCH_URL`
-- `OPENSEARCH_USERNAME`
-- `OPENSEARCH_PASSWORD`
-- `OPENSEARCH_SKIP_TLS_VERIFY`
-- `DASHBOARDS_URL`
-- `DASHBOARDS_USERNAME`
-- `DASHBOARDS_PASSWORD`
-- `DASHBOARDS_TENANT`
-- `LDAP_URL`
-- `LDAP_BASE_DN`
-- `LDAP_USER_FILTER`
-- `LDAP_GROUP_ATTRIBUTE`
-- `LDAP_GROUP_PREFIX`
-- `LDAP_USER_DOMAIN`
-- `LDAP_STARTTLS`
-- `LDAP_SKIP_TLS_VERIFY`
-
-Current defaults in the code:
-
-- `LISTEN_ADDR=:8080`
-- `OPENSEARCH_URL=https://localhost:9200`
-- `DASHBOARDS_URL=http://localhost:5601`
-- username defaults to `admin`
-- TLS verification stays enabled by default; set `OPENSEARCH_SKIP_TLS_VERIFY=true` only for local self-signed clusters
-
-Note that per-index data views are created in tenants named after the owning namespace, so `DASHBOARDS_TENANT` is not used for those auto-created views. It remains available as the default tenant value for gateway-internal Dashboards API calls that do not provide an explicit tenant.
-For logged-in users, the gateway redirects to Dashboards without selecting a tenant. OpenSearch Dashboards owns tenant selection, including switching between custom tenants.
-The gateway does not rewrite proxied Dashboards responses. It only uses the Dashboards saved-object API for gateway-managed data-view creation, and concrete ingest data views do not replace an existing tenant default.
-
-## Route Summary
-
-- `GET /` redirects to `/login`
-- `GET /login` renders the login form
-- `POST /login` authenticates against LDAP and opens a Dashboards session
-- `POST /logout` clears the session
-- `GET /dashboards/*` proxies OpenSearch Dashboards for authenticated users
-- `GET /demo` serves the browser demo ingest form
-- `POST /ingest/<namespace>-<index>` ingests a JSON document into the rollover alias for that index family
-
-## Example Ingest
+If you are using the Compose OpenSearch, Dashboards, and LDAP services from the host, set host-facing URLs:
 
 ```bash
-curl -X POST http://localhost:8080/ingest/team10-hello \
-  -u ingestuser:dogood \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "event_time": "2024-12-30T10:11:12Z",
-    "message": "team10-hello event received",
-    "customer_id": 42
-  }'
+export OPENSEARCH_URL=https://localhost:9200
+export OPENSEARCH_USERNAME=admin
+export OPENSEARCH_PASSWORD='Cedar7!FluxOrbit29'
+export OPENSEARCH_SKIP_TLS_VERIFY=true
+export DASHBOARDS_URL=http://localhost:5601
+export DASHBOARDS_USERNAME=admin
+export DASHBOARDS_PASSWORD='Cedar7!FluxOrbit29'
+export LDAP_URL=ldaps://localhost:389
+export LISTEN_ADDR=:8080
+
+go run .
 ```
 
-That example works because `ingestuser` has LDAP group `team10_rw`. If the LDAP user does not have write access for the target namespace prefix, the gateway responds with `403 Forbidden`.
+## Development
 
-## Project Files
-
-- [main.go](/home/define42/git/OpenSearchGateway/main.go): thin entrypoint that loads config, bootstraps dependencies, and starts the HTTP server
-- [internal/server/templates/login.html](/home/define42/git/OpenSearchGateway/internal/server/templates/login.html): embedded login page served at `/login`
-- [internal/server/templates/demo.html](/home/define42/git/OpenSearchGateway/internal/server/templates/demo.html): embedded demo ingest page served at `/demo`
-- [internal/opensearch](/home/define42/git/OpenSearchGateway/internal/opensearch): OpenSearch and Dashboards client logic
-- [internal/server](/home/define42/git/OpenSearchGateway/internal/server): HTTP routes, sessions, Dashboards proxy, and browser responses
-- [main_test.go](/home/define42/git/OpenSearchGateway/main_test.go): request flow and bootstrap tests
-- [docker-compose.yml](/home/define42/git/OpenSearchGateway/docker-compose.yml): local OpenSearch, Dashboards, and gateway stack
-- [Dockerfile](/home/define42/git/OpenSearchGateway/Dockerfile): container image for the gateway
-- [makefile](/home/define42/git/OpenSearchGateway/makefile): local compose convenience target
-
-## Development Notes
-
-- OpenSearch TLS verification is enabled by default; use `OPENSEARCH_SKIP_TLS_VERIFY=true` only for local self-signed clusters
-- `/ingest` now requires LDAP authentication plus namespace write access
-- batching is not implemented; each request indexes one JSON document
-- the index template and ISM policy are shared, global bootstrap resources
-- the tenant and data-view setup is demand-driven and happens per index family on first ingest
-
-## Testing
-
-Run the test suite with:
+Useful commands:
 
 ```bash
 go test ./...
+go test ./... -short
+make test
+make lint
+make gosec
 ```
 
-Notes:
+The LDAP integration tests use Docker for GLAuth and skip automatically when Docker is unavailable. Use `go test ./... -short` to skip Docker-backed tests explicitly.
 
-- some LDAP integration tests start a real GLAuth container with Docker
-- those tests are skipped automatically when Docker is unavailable
-- use `go test ./... -short` if you want to skip the Docker-backed integration tests explicitly
+The repository layout is intentionally small:
 
-## Summary
+| Path | Purpose |
+| --- | --- |
+| `main.go` | startup, shared OpenSearch bootstrap, HTTP server lifecycle |
+| `internal/config` | environment-backed runtime config |
+| `internal/ldap` | LDAP bind/search and group-to-access mapping |
+| `internal/authz` | namespace authorization semantics |
+| `internal/ingest` | ingest path parsing, document validation, auth cache |
+| `internal/opensearch` | OpenSearch, Security API, ISM, and Dashboards clients |
+| `internal/server` | HTTP routes, login flow, sessions, Dashboards proxy |
+| `internal/server/templates` | embedded login and demo pages |
+| `docker-compose.yml` | local OpenSearch, Dashboards, gateway, and LDAP stack |
+| `opensearch_dashboards.yml` | local Dashboards base-path and proxy header config |
+| `testldap/default-config.cfg` | local LDAP users and groups |
 
-This project is a narrow, purpose-built ingress and access layer for OpenSearch. It accepts LDAP-authenticated JSON writes over HTTP, validates and routes documents by `event_time`, creates rollover-friendly daily aliases and backing indices, and automatically prepares matching Dashboards tenants and data views so newly ingested data is easier to discover and browse.
+## Limitations
+
+- Ingest is single-document only; there is no bulk API.
+- Session keys are generated at process start and are not configurable yet.
+- Shard and replica counts are currently hard-coded in the gateway config.
+- Dashboards resource setup is synchronous; failed tenant or data-view creation fails the ingest before writing the document.
+- The service is built for namespace-prefixed index families, not arbitrary OpenSearch indexing.
